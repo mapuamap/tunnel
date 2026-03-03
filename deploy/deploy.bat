@@ -12,6 +12,9 @@ set GIT_REPO=github.com/mapuamap/tunnel.git
 set APPSETTINGS_PATH=src\TunnelManager.Web\appsettings.json
 set APP_PORT=5101
 
+:: Navigate to project root (one level up from deploy folder)
+cd /d "%~dp0.."
+
 :: Check for GIT_TOKEN environment variable
 if "%GIT_TOKEN%"=="" (
     echo [ERROR] GIT_TOKEN environment variable is not set!
@@ -40,15 +43,15 @@ if errorlevel 1 (
 :: 1. BUILD
 :: ============================================
 echo [1/6] Building project...
-cd src\TunnelManager.Web
+pushd src\TunnelManager.Web
 dotnet build -c Release
 if errorlevel 1 (
     echo [X] Build failed!
-    cd ..\..
+    popd
     pause
     exit /b 1
 )
-cd ..\..
+popd
 echo [OK] Build successful
 
 :: ============================================
@@ -64,7 +67,7 @@ echo [3/6] Checking for changes...
 
 git diff --cached --quiet
 if not errorlevel 1 (
-    echo [!] No changes to commit - skipping...
+    echo [!] No changes to commit - skipping to deploy...
     goto :DEPLOY
 )
 
@@ -84,8 +87,9 @@ for /f "tokens=*" %%f in ('git diff --cached --name-only ^| findstr /i "Service 
     )
 )
 
-:: Generate commit message
-set TIMESTAMP=%date:~-4%-%date:~3,2%-%date:~0,2% %time:~0,5%
+:: Generate locale-independent timestamp via PowerShell
+for /f "tokens=*" %%t in ('powershell -NoProfile -Command "Get-Date -Format \"yyyy-MM-dd HH:mm\""') do set TIMESTAMP=%%t
+
 if "!SERVICES!"=="" (
     set COMMIT_MSG=deploy: update %FILE_COUNT% files [%TIMESTAMP%]
 ) else (
@@ -99,16 +103,10 @@ git commit -m "%COMMIT_MSG%"
 :: 5. GIT PUSH
 :: ============================================
 echo [5/6] Pushing to GitHub...
-git push -u origin master 2>nul
+git push -u origin master
 if errorlevel 1 (
-    git push
-    if errorlevel 1 (
-        echo [WARNING] Push failed - this may be due to GitHub security rules
-        echo [INFO] You can push manually or allow the secret in GitHub settings
-        echo [INFO] Continuing with deployment anyway...
-    ) else (
-        echo [OK] Code pushed to GitHub
-    )
+    echo [WARNING] Push failed
+    echo [INFO] Continuing with deployment anyway...
 ) else (
     echo [OK] Code pushed to GitHub
 )
@@ -121,7 +119,6 @@ echo.
 echo [6/6] Updating Tunnel Manager on VM...
 echo     Connecting to %VM_USER%@%VM_HOST%
 echo     Project path: %VM_PROJECT_PATH%
-echo     Enter password when prompted
 echo.
 
 ssh -t %VM_USER%@%VM_HOST% "cd %VM_PROJECT_PATH% && git fetch https://%GIT_TOKEN%@%GIT_REPO% master && git reset --hard FETCH_HEAD && docker compose -f docker-compose.prod.yml down && docker compose -f docker-compose.prod.yml up -d --build"
@@ -133,7 +130,7 @@ if errorlevel 1 (
     echo Try manually:
     echo   ssh %VM_USER%@%VM_HOST%
     echo   cd %VM_PROJECT_PATH%
-    echo   git fetch https://%GIT_TOKEN%@%GIT_REPO% master
+    echo   git fetch https://TOKEN@%GIT_REPO% master
     echo   git reset --hard FETCH_HEAD
     echo   docker compose -f docker-compose.prod.yml down
     echo   docker compose -f docker-compose.prod.yml up -d --build
