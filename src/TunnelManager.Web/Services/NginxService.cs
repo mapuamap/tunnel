@@ -237,35 +237,67 @@ public class NginxService
         }
 
         var existingContent = _sshService.ReadFile(configPath);
-        var wsConfig = config.HasWebSocket ? @"
+        var hasCertbotSsl = Regex.IsMatch(existingContent, @"managed by Certbot");
+
+        _loggerMM?.Debug("NginxService", "UpdateForward", $"Updating forward for {domain}",
+            @params: new { domain, target = config.Target, hasWebSocket = config.HasWebSocket, hasSsl = config.HasSsl, hasCertbotSsl },
+            tags: new[] { "nginx", "forward", "update" });
+
+        // Build location block content
+        var locationLines = new List<string>
+        {
+            $"        proxy_pass http://{config.Target};",
+            "        proxy_set_header Host $host;",
+            "        proxy_set_header X-Real-IP $remote_addr;",
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+            "        proxy_set_header X-Forwarded-Proto $scheme;"
+        };
+
+        if (config.HasWebSocket)
+        {
+            locationLines.Add("        proxy_http_version 1.1;");
+            locationLines.Add("        proxy_set_header Upgrade $http_upgrade;");
+            locationLines.Add("        proxy_set_header Connection \"upgrade\";");
+        }
+
+        // Preserve auth if exists in original
+        var authMatch = Regex.Match(existingContent, @"(auth_basic\s+""[^""]*"";)\s*(auth_basic_user_file\s+[^;]+;)");
+        if (authMatch.Success)
+        {
+            locationLines.Add("        " + authMatch.Groups[1].Value);
+            locationLines.Add("        " + authMatch.Groups[2].Value);
+        }
+
+        var locationContent = string.Join("\n", locationLines);
+        string nginxConfig;
+
+        if (hasCertbotSsl && config.HasSsl)
+        {
+            // Preserve the entire certbot-managed config, only replace the location / block content
+            nginxConfig = Regex.Replace(existingContent,
+                @"(location\s+/\s*\{)\s*[^}]*(})",
+                $"$1\n{locationContent}\n    $2",
+                RegexOptions.Singleline);
+
+            _loggerMM?.Debug("NginxService", "UpdateForward", $"Preserved certbot SSL config for {domain}",
+                tags: new[] { "nginx", "forward", "update", "ssl-preserved" });
+        }
+        else
+        {
+            // Build fresh HTTP-only config
+            var wsConfig = config.HasWebSocket ? @"
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection ""upgrade"";" : "";
 
-        // Preserve SSL config only if the forward should keep SSL
-        var sslConfig = "";
-        if (config.HasSsl && Regex.IsMatch(existingContent, @"listen\s+443"))
-        {
-            var sslMatch = Regex.Match(existingContent, @"(listen\s+443[^;]+;[\s\S]*?ssl_certificate[^;]+;[\s\S]*?ssl_certificate_key[^;]+;)");
-            if (sslMatch.Success)
-            {
-                sslConfig = sslMatch.Groups[1].Value + "\n    ";
-            }
-        }
-
-        // Preserve auth if exists
-        var authConfig = "";
-        if (Regex.IsMatch(existingContent, @"auth_basic"))
-        {
-            var authMatch = Regex.Match(existingContent, @"(auth_basic[^;]+;[\s\S]*?auth_basic_user_file[^;]+;)");
+            var authConfig = "";
             if (authMatch.Success)
             {
-                authConfig = "\n        " + authMatch.Groups[1].Value;
+                authConfig = $"\n        {authMatch.Groups[1].Value}\n        {authMatch.Groups[2].Value}";
             }
-        }
 
-        var nginxConfig = $@"server {{
-    listen 80;{sslConfig}
+            nginxConfig = $@"server {{
+    listen 80;
     server_name {domain};
     
     location / {{
@@ -276,6 +308,12 @@ public class NginxService
         proxy_set_header X-Forwarded-Proto $scheme;{wsConfig}{authConfig}
     }}
 }}";
+        }
+
+        _loggerMM?.Debug("NginxService", "UpdateForward", $"Writing nginx config for {domain}",
+            @params: new { domain, configLength = nginxConfig.Length },
+            input: nginxConfig,
+            tags: new[] { "nginx", "forward", "update", "config-write" });
 
         _sshService.WriteFile(configPath, nginxConfig);
 
@@ -284,10 +322,15 @@ public class NginxService
         {
             TestAndReloadNginx();
         }
-        catch
+        catch (Exception ex)
         {
+            _loggerMM?.Error("NginxService", "UpdateForward", $"Nginx test failed for {domain}, rolling back: {ex.Message}",
+                exception: ex,
+                @params: new { domain },
+                tags: new[] { "nginx", "forward", "update", "rollback" });
             // Rollback: restore original config
             _sshService.WriteFile(configPath, existingContent);
+            TestAndReloadNginx();
             throw;
         }
 
