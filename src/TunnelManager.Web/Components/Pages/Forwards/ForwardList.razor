@@ -1,6 +1,7 @@
 @page "/forwards"
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Web
+@using Logger_MM.Agent
 @using TunnelManager.Web.Components.Shared
 @using TunnelManager.Web.Components.Pages.Forwards
 @attribute [Authorize]
@@ -9,6 +10,8 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<ForwardList> Logger
+@inject LoggerMMAgent? LoggerMM
+@inject AuthenticationStateProvider AuthStateProvider
 
 <PageTitle>HTTP Forwards - Tunnel Manager</PageTitle>
 
@@ -181,6 +184,9 @@ else
 
     private async Task DeleteForward(ForwardConfig forward)
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         try
         {
             var parameters = new DialogParameters
@@ -203,17 +209,32 @@ else
                 {
                     NginxService.DeleteForward(forward.Domain);
                     Snackbar.Add($"Forward {forward.Domain} deleted", Severity.Success);
+                    
+                    LoggerMM?.UserAction("ForwardList", "DeleteForward", $"Forward deleted: {forward.Domain}",
+                        user: user,
+                        @params: new { domain = forward.Domain },
+                        tags: new[] { "forward", "delete", "user-action" });
+                    
                     await LoadForwards();
                 }
                 catch (Exception ex)
                 {
                     Snackbar.Add($"Error deleting forward: {ex.Message}", Severity.Error);
+                    LoggerMM?.Error("ForwardList", "DeleteForward", $"Failed to delete forward {forward.Domain}: {ex.Message}",
+                        user: user,
+                        exception: ex,
+                        @params: new { domain = forward.Domain },
+                        tags: new[] { "forward", "delete", "error" });
                 }
             }
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+            LoggerMM?.Error("ForwardList", "DeleteForward", $"Error in delete forward dialog: {ex.Message}",
+                user: user,
+                exception: ex,
+                tags: new[] { "forward", "delete", "error" });
         }
     }
 }

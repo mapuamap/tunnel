@@ -1,3 +1,4 @@
+using Logger_MM.Agent;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -12,11 +13,13 @@ public class AuthController : ControllerBase
 {
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthController> _logger;
+    private readonly LoggerMMAgent? _loggerMM;
 
-    public AuthController(IConfiguration configuration, ILogger<AuthController> logger)
+    public AuthController(IConfiguration configuration, ILogger<AuthController> logger, LoggerMMAgent? loggerMM = null)
     {
         _configuration = configuration;
         _logger = logger;
+        _loggerMM = loggerMM;
     }
 
     [HttpPost("login")]
@@ -34,10 +37,18 @@ public class AuthController : ControllerBase
         {
             await SignInUserAsync(request.Username);
             _logger.LogInformation("[Auth] User '{Username}' logged in successfully", request.Username);
+            _loggerMM?.UserAction("AuthController", "Login", $"User logged in successfully",
+                user: request.Username,
+                @params: new { username = request.Username },
+                tags: new[] { "auth", "login" });
             return Ok(new { success = true, username = request.Username });
         }
 
         _logger.LogWarning("[Auth] Login failed for user '{Username}'", request.Username);
+        _loggerMM?.UserAction("AuthController", "Login", $"Login failed - invalid credentials",
+            user: request.Username,
+            @params: new { username = request.Username },
+            tags: new[] { "auth", "login", "failure" });
         return Unauthorized(new { error = "Invalid username or password" });
     }
 
@@ -56,28 +67,44 @@ public class AuthController : ControllerBase
         {
             await SignInUserAsync(username);
             _logger.LogInformation("[Auth] User '{Username}' logged in successfully via form", username);
+            _loggerMM?.UserAction("AuthController", "LoginForm", $"User logged in successfully via form",
+                user: username,
+                @params: new { username, returnUrl },
+                tags: new[] { "auth", "login" });
 
             var targetUrl = string.IsNullOrEmpty(returnUrl) ? "/" : Uri.UnescapeDataString(returnUrl);
             return Redirect(targetUrl);
         }
 
         _logger.LogWarning("[Auth] Form login failed for user '{Username}'", username);
+        _loggerMM?.UserAction("AuthController", "LoginForm", $"Form login failed - invalid credentials",
+            user: username,
+            @params: new { username },
+            tags: new[] { "auth", "login", "failure" });
         return Redirect("/login?error=Invalid+username+or+password");
     }
 
     [HttpPost("logout")]
     public async Task<IActionResult> Logout()
     {
+        var username = User.Identity?.Name ?? "unknown";
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         _logger.LogInformation("[Auth] User logged out");
+        _loggerMM?.UserAction("AuthController", "Logout", $"User logged out",
+            user: username,
+            tags: new[] { "auth", "logout" });
         return Ok(new { success = true });
     }
 
     [HttpGet("logout-redirect")]
     public async Task<IActionResult> LogoutRedirect()
     {
+        var username = User.Identity?.Name ?? "unknown";
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         _logger.LogInformation("[Auth] User logged out via redirect");
+        _loggerMM?.UserAction("AuthController", "LogoutRedirect", $"User logged out via redirect",
+            user: username,
+            tags: new[] { "auth", "logout" });
         return Redirect("/login");
     }
 

@@ -1,7 +1,10 @@
 @using TunnelManager.Web.Models
+@using Logger_MM.Agent
 @inject SshTunnelService SshTunnelService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject LoggerMMAgent? LoggerMM
+@inject AuthenticationStateProvider AuthStateProvider
 
 <MudDialog>
     <DialogContent>
@@ -38,15 +41,27 @@
         }
     }
 
-    private void AutoAssignPort()
+    private async Task AutoAssignPort()
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         try
         {
             _tunnel.ExternalPort = SshTunnelService.GetNextAvailablePort();
+            
+            LoggerMM?.UserAction("SshTunnelEdit", "AutoAssignPort", $"Auto-assigned port: {_tunnel.ExternalPort}",
+                user: user,
+                @params: new { port = _tunnel.ExternalPort },
+                tags: new[] { "tunnel", "port", "user-action" });
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+            LoggerMM?.Error("SshTunnelEdit", "AutoAssignPort", $"Failed to auto-assign port: {ex.Message}",
+                user: user,
+                exception: ex,
+                tags: new[] { "tunnel", "port", "error" });
         }
     }
 
@@ -57,23 +72,38 @@
 
     private async Task Save()
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         try
         {
             if (string.IsNullOrWhiteSpace(_tunnel.Name) || string.IsNullOrWhiteSpace(_tunnel.TargetIp))
             {
                 Snackbar.Add("Name and Target IP are required", Severity.Warning);
+                LoggerMM?.Warning("SshTunnelEdit", "Save", "Validation failed: Name and Target IP are required",
+                    user: user,
+                    @params: new { name = _tunnel.Name, targetIp = _tunnel.TargetIp },
+                    tags: new[] { "tunnel", "validation" });
                 return;
             }
 
             if (!System.Net.IPAddress.TryParse(_tunnel.TargetIp, out _))
             {
                 Snackbar.Add("Invalid IP address", Severity.Warning);
+                LoggerMM?.Warning("SshTunnelEdit", "Save", "Validation failed: Invalid IP address",
+                    user: user,
+                    @params: new { targetIp = _tunnel.TargetIp },
+                    tags: new[] { "tunnel", "validation" });
                 return;
             }
 
             if (_tunnel.ExternalPort < 2222 || _tunnel.ExternalPort > 2299)
             {
                 Snackbar.Add("External port must be between 2222 and 2299", Severity.Warning);
+                LoggerMM?.Warning("SshTunnelEdit", "Save", "Validation failed: External port out of range",
+                    user: user,
+                    @params: new { externalPort = _tunnel.ExternalPort },
+                    tags: new[] { "tunnel", "validation" });
                 return;
             }
 
@@ -81,11 +111,21 @@
             {
                 SshTunnelService.UpdateTunnel(_tunnel.Name, _tunnel);
                 Snackbar.Add($"SSH tunnel '{_tunnel.Name}' updated", Severity.Success);
+                
+                LoggerMM?.UserAction("SshTunnelEdit", "Save", $"SSH tunnel updated: {_tunnel.Name}",
+                    user: user,
+                    @params: new { name = _tunnel.Name, externalPort = _tunnel.ExternalPort, targetIp = _tunnel.TargetIp, targetPort = _tunnel.TargetPort },
+                    tags: new[] { "tunnel", "update", "user-action" });
             }
             else
             {
                 SshTunnelService.CreateTunnel(_tunnel);
                 Snackbar.Add($"SSH tunnel '{_tunnel.Name}' created", Severity.Success);
+                
+                LoggerMM?.UserAction("SshTunnelEdit", "Save", $"SSH tunnel created: {_tunnel.Name}",
+                    user: user,
+                    @params: new { name = _tunnel.Name, externalPort = _tunnel.ExternalPort, targetIp = _tunnel.TargetIp, targetPort = _tunnel.TargetPort },
+                    tags: new[] { "tunnel", "create", "user-action" });
             }
 
             MudDialog.Close(DialogResult.Ok(true));
@@ -93,6 +133,11 @@
         catch (Exception ex)
         {
             Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+            LoggerMM?.Error("SshTunnelEdit", "Save", $"Failed to save SSH tunnel: {ex.Message}",
+                user: user,
+                exception: ex,
+                @params: new { name = _tunnel.Name, isEdit = _isEdit },
+                tags: new[] { "tunnel", "save", "error" });
         }
     }
 }

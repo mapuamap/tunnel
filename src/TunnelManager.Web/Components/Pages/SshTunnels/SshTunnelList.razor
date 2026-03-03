@@ -1,10 +1,13 @@
 @page "/ssh-tunnels"
 @using Microsoft.AspNetCore.Authorization
+@using Logger_MM.Agent
 @using TunnelManager.Web.Components.Shared
 @attribute [Authorize]
 @inject SshTunnelService SshTunnelService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject LoggerMMAgent? LoggerMM
+@inject AuthenticationStateProvider AuthStateProvider
 
 <PageTitle>SSH Tunnels - Tunnel Manager</PageTitle>
 
@@ -104,6 +107,9 @@ else
 
     private async Task DeleteTunnel(SshTunnelConfig tunnel)
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         var parameters = new DialogParameters
         {
             ["ContentText"] = $"Are you sure you want to delete SSH tunnel '{tunnel.Name}' (port {tunnel.ExternalPort})?",
@@ -120,11 +126,22 @@ else
             {
                 SshTunnelService.DeleteTunnel(tunnel.Name);
                 Snackbar.Add($"SSH tunnel '{tunnel.Name}' deleted", Severity.Success);
+                
+                LoggerMM?.UserAction("SshTunnelList", "DeleteTunnel", $"SSH tunnel deleted: {tunnel.Name}",
+                    user: user,
+                    @params: new { name = tunnel.Name, externalPort = tunnel.ExternalPort },
+                    tags: new[] { "tunnel", "delete", "user-action" });
+                
                 await LoadTunnels();
             }
             catch (Exception ex)
             {
                 Snackbar.Add($"Error deleting tunnel: {ex.Message}", Severity.Error);
+                LoggerMM?.Error("SshTunnelList", "DeleteTunnel", $"Failed to delete SSH tunnel {tunnel.Name}: {ex.Message}",
+                    user: user,
+                    exception: ex,
+                    @params: new { name = tunnel.Name },
+                    tags: new[] { "tunnel", "delete", "error" });
             }
         }
     }

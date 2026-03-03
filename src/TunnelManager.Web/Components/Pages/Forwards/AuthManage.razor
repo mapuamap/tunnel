@@ -1,8 +1,11 @@
 @using TunnelManager.Web.Models
 @using TunnelManager.Web.Components.Shared
+@using Logger_MM.Agent
 @inject NginxAuthService NginxAuthService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject LoggerMMAgent? LoggerMM
+@inject AuthenticationStateProvider AuthStateProvider
 
 <MudDialog>
     <DialogContent>
@@ -71,6 +74,9 @@
 
     private async Task AddOrUpdateAuth()
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
         {
             Snackbar.Add("Username and password are required", Severity.Warning);
@@ -83,11 +89,21 @@
             {
                 NginxAuthService.UpdateAuth(Domain, _username, _password);
                 Snackbar.Add("Password updated", Severity.Success);
+                
+                LoggerMM?.UserAction("AuthManage", "AddOrUpdateAuth", $"Auth password updated for domain: {Domain}, username: {_username}",
+                    user: user,
+                    @params: new { domain = Domain, username = _username },
+                    tags: new[] { "auth", "update", "user-action" });
             }
             else
             {
                 NginxAuthService.AddAuth(Domain, _username, _password, _realm);
                 Snackbar.Add("Auth added", Severity.Success);
+                
+                LoggerMM?.UserAction("AuthManage", "AddOrUpdateAuth", $"Auth added for domain: {Domain}, username: {_username}",
+                    user: user,
+                    @params: new { domain = Domain, username = _username, realm = _realm },
+                    tags: new[] { "auth", "add", "user-action" });
             }
             LoadAuthStatus();
             _username = string.Empty;
@@ -96,11 +112,19 @@
         catch (Exception ex)
         {
             Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+            LoggerMM?.Error("AuthManage", "AddOrUpdateAuth", $"Failed to add/update auth for domain {Domain}: {ex.Message}",
+                user: user,
+                exception: ex,
+                @params: new { domain = Domain, username = _username },
+                tags: new[] { "auth", "error" });
         }
     }
 
     private async Task RemoveAuth()
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         var parameters = new DialogParameters
         {
             ["ContentText"] = $"Are you sure you want to remove Basic Auth from {Domain}?",
@@ -117,11 +141,22 @@
             {
                 NginxAuthService.RemoveAuth(Domain);
                 Snackbar.Add("Auth removed", Severity.Success);
+                
+                LoggerMM?.UserAction("AuthManage", "RemoveAuth", $"Auth removed for domain: {Domain}",
+                    user: user,
+                    @params: new { domain = Domain },
+                    tags: new[] { "auth", "remove", "user-action" });
+                
                 LoadAuthStatus();
             }
             catch (Exception ex)
             {
                 Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+                LoggerMM?.Error("AuthManage", "RemoveAuth", $"Failed to remove auth for domain {Domain}: {ex.Message}",
+                    user: user,
+                    exception: ex,
+                    @params: new { domain = Domain },
+                    tags: new[] { "auth", "remove", "error" });
             }
         }
     }

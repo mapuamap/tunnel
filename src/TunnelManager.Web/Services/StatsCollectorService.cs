@@ -1,3 +1,4 @@
+using Logger_MM.Agent;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using TunnelManager.Web.Data;
@@ -9,16 +10,21 @@ public class StatsCollectorService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<StatsCollectorService> _logger;
+    private readonly LoggerMMAgent? _loggerMM;
     private DateTime _lastReadTime = DateTime.UtcNow;
 
-    public StatsCollectorService(IServiceProvider serviceProvider, ILogger<StatsCollectorService> logger)
+    public StatsCollectorService(IServiceProvider serviceProvider, ILogger<StatsCollectorService> logger, LoggerMMAgent? loggerMM = null)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _loggerMM = loggerMM;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _loggerMM?.Info("StatsCollector", "ExecuteAsync", "Stats collector service started",
+            tags: new[] { "stats", "service" });
+        
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -29,13 +35,22 @@ public class StatsCollectorService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error collecting stats");
+                _loggerMM?.Error("StatsCollector", "ExecuteAsync", $"Error collecting stats: {ex.Message}",
+                    exception: ex,
+                    tags: new[] { "stats", "service", "error" });
                 await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
         }
+        
+        _loggerMM?.Info("StatsCollector", "ExecuteAsync", "Stats collector service stopped",
+            tags: new[] { "stats", "service" });
     }
 
     private async Task CollectStats()
     {
+        _loggerMM?.Info("StatsCollector", "CollectStats", "Starting stats collection cycle",
+            tags: new[] { "stats", "collection" });
+        
         using var scope = _serviceProvider.CreateScope();
         var sshService = scope.ServiceProvider.GetRequiredService<SshService>();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -51,6 +66,10 @@ public class StatsCollectorService : BackgroundService
 
             var stats = ParseLogs(logContent);
             _lastReadTime = DateTime.UtcNow;
+            
+            _loggerMM?.Debug("StatsCollector", "CollectStats", $"Parsed {stats.Count} log entries",
+                @params: new { logEntryCount = stats.Count },
+                tags: new[] { "stats", "collection" });
 
             // Group by domain and time window (hourly)
             var grouped = stats
@@ -92,10 +111,17 @@ public class StatsCollectorService : BackgroundService
 
             await dbContext.SaveChangesAsync();
             _logger.LogInformation("Collected stats for {Count} domains", grouped.Count);
+            
+            _loggerMM?.Info("StatsCollector", "CollectStats", $"Stats collection completed for {grouped.Count} domains",
+                @params: new { domainCount = grouped.Count, totalRequests = grouped.Sum(g => g.Requests) },
+                tags: new[] { "stats", "collection" });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to collect stats");
+            _loggerMM?.Error("StatsCollector", "CollectStats", $"Failed to collect stats: {ex.Message}",
+                exception: ex,
+                tags: new[] { "stats", "collection", "error" });
         }
     }
 

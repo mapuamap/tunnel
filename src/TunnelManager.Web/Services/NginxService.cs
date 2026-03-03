@@ -1,3 +1,5 @@
+using Logger_MM.Agent;
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using TunnelManager.Web.Models;
 
@@ -8,33 +10,87 @@ public class NginxService
     private readonly SshService _sshService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<NginxService> _logger;
+    private readonly LoggerMMAgent? _loggerMM;
 
-    public NginxService(SshService sshService, IConfiguration configuration, ILogger<NginxService> logger)
+    // Cache for forward configs (short TTL to keep UI responsive)
+    private List<ForwardConfig>? _cachedForwards;
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private readonly object _cacheLock = new();
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(15);
+
+    public NginxService(SshService sshService, IConfiguration configuration, ILogger<NginxService> logger, LoggerMMAgent? loggerMM = null)
     {
         _sshService = sshService;
         _configuration = configuration;
         _logger = logger;
+        _loggerMM = loggerMM;
     }
 
     private string ConfigDir => _configuration["Vps:NginxConfigDir"] ?? "/etc/nginx/sites-available";
     private string EnabledDir => _configuration["Vps:NginxEnabledDir"] ?? "/etc/nginx/sites-enabled";
 
+    /// <summary>
+    /// Invalidate cache so the next call re-reads from server.
+    /// </summary>
+    public void InvalidateCache()
+    {
+        lock (_cacheLock)
+        {
+            _cachedForwards = null;
+            _cacheExpiry = DateTime.MinValue;
+        }
+    }
+
     public List<ForwardConfig> GetAllForwards()
     {
+        // Return cached result if still valid
+        lock (_cacheLock)
+        {
+            if (_cachedForwards != null && DateTime.UtcNow < _cacheExpiry)
+            {
+                _loggerMM?.Debug("NginxService", "GetAllForwards", "Returning cached forward configurations",
+                    @params: new { count = _cachedForwards.Count },
+                    tags: new[] { "nginx", "forward", "list", "cache" });
+                return new List<ForwardConfig>(_cachedForwards);
+            }
+        }
+
+        _loggerMM?.Info("NginxService", "GetAllForwards", "Retrieving all forward configurations",
+            tags: new[] { "nginx", "forward", "list" });
+
         var forwards = new List<ForwardConfig>();
-        
+
         try
         {
-            var result = _sshService.ExecuteCommand($"ls {ConfigDir}/");
-            var files = result.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(f => f.Contains(".denys.fast") || f.Contains("."))
-                .ToList();
+            // BATCH: Read all configs + check enabled status in TWO ssh commands instead of N*3 SFTP calls
+            // 1. Get list of config files + their content in one command
+            var batchResult = _sshService.ExecuteCommand(
+                $"for f in {ConfigDir}/*; do [ -f \"$f\" ] && echo \"===FILE===$(basename $f)\" && cat \"$f\"; done");
 
-            foreach (var file in files)
+            // 2. Get list of enabled symlinks in one command
+            var enabledResult = _sshService.ExecuteCommand($"ls {EnabledDir}/ 2>/dev/null || echo ''");
+            var enabledSet = new HashSet<string>(
+                enabledResult.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+            _loggerMM?.Debug("NginxService", "GetAllForwards", $"Batch read configs, {enabledSet.Count} enabled",
+                @params: new { enabledCount = enabledSet.Count, configDir = ConfigDir },
+                tags: new[] { "nginx", "forward", "list" });
+
+            // Parse the batch output
+            var sections = batchResult.Split("===FILE===", StringSplitOptions.RemoveEmptyEntries);
+            foreach (var section in sections)
             {
+                var newlineIdx = section.IndexOf('\n');
+                if (newlineIdx < 0) continue;
+
+                var domain = section[..newlineIdx].Trim();
+                var content = section[(newlineIdx + 1)..];
+
+                if (string.IsNullOrWhiteSpace(domain) || domain == "default") continue;
+
                 try
                 {
-                    var config = GetForwardConfig(file);
+                    var config = ParseConfig(content, domain, enabledSet.Contains(domain));
                     if (config != null)
                     {
                         forwards.Add(config);
@@ -42,13 +98,30 @@ public class NginxService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to parse config for {File}", file);
+                    _logger.LogWarning(ex, "Failed to parse config for {File}", domain);
+                    _loggerMM?.Warning("NginxService", "GetAllForwards", $"Failed to parse config for {domain}: {ex.Message}",
+                        @params: new { file = domain },
+                        tags: new[] { "nginx", "forward", "list", "parse-error" });
                 }
+            }
+
+            _loggerMM?.Info("NginxService", "GetAllForwards", $"Retrieved {forwards.Count} forward configurations",
+                @params: new { forwardCount = forwards.Count },
+                tags: new[] { "nginx", "forward", "list" });
+
+            // Update cache
+            lock (_cacheLock)
+            {
+                _cachedForwards = new List<ForwardConfig>(forwards);
+                _cacheExpiry = DateTime.UtcNow + CacheDuration;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to list forwards");
+            _loggerMM?.Error("NginxService", "GetAllForwards", $"Failed to list forwards: {ex.Message}",
+                exception: ex,
+                tags: new[] { "nginx", "forward", "list", "error" });
         }
 
         return forwards;
@@ -56,17 +129,32 @@ public class NginxService
 
     public ForwardConfig? GetForwardConfig(string domain)
     {
+        _loggerMM?.Debug("NginxService", "GetForwardConfig", $"Getting forward config for domain: {domain}",
+            @params: new { domain },
+            tags: new[] { "nginx", "forward" });
+
         var configPath = $"{ConfigDir}/{domain}";
         if (!_sshService.FileExists(configPath))
         {
+            _loggerMM?.Debug("NginxService", "GetForwardConfig", $"Config file not found for domain: {domain}",
+                @params: new { domain, configPath },
+                tags: new[] { "nginx", "forward" });
             return null;
         }
 
         var content = _sshService.ReadFile(configPath);
-        return ParseConfig(content, domain);
+        var enabledPath = $"{EnabledDir}/{domain}";
+        var isEnabled = _sshService.FileExists(enabledPath);
+        var config = ParseConfig(content, domain, isEnabled);
+
+        _loggerMM?.Debug("NginxService", "GetForwardConfig", $"Retrieved forward config for domain: {domain}",
+            @params: new { domain, hasSsl = config?.HasSsl, hasAuth = config?.HasAuth, hasWebSocket = config?.HasWebSocket, isEnabled = config?.IsEnabled },
+            tags: new[] { "nginx", "forward" });
+
+        return config;
     }
 
-    private ForwardConfig? ParseConfig(string content, string domain)
+    private ForwardConfig? ParseConfig(string content, string domain, bool isEnabled)
     {
         var config = new ForwardConfig { Domain = domain };
 
@@ -84,12 +172,11 @@ public class NginxService
         config.HasAuth = Regex.IsMatch(content, @"auth_basic");
 
         // Check WebSocket
-        config.HasWebSocket = Regex.IsMatch(content, @"proxy_http_version\s+1\.1") && 
+        config.HasWebSocket = Regex.IsMatch(content, @"proxy_http_version\s+1\.1") &&
                              Regex.IsMatch(content, @"Connection\s+[""]upgrade[""]");
 
-        // Check if enabled
-        var enabledPath = $"{EnabledDir}/{domain}";
-        config.IsEnabled = _sshService.FileExists(enabledPath);
+        // Use pre-fetched enabled status instead of SFTP call
+        config.IsEnabled = isEnabled;
 
         return config;
     }
@@ -132,6 +219,8 @@ public class NginxService
             _sshService.DeleteFile(configPath);
             throw;
         }
+
+        InvalidateCache();
 
         if (getSsl)
         {
@@ -201,32 +290,72 @@ public class NginxService
             _sshService.WriteFile(configPath, existingContent);
             throw;
         }
+
+        InvalidateCache();
     }
 
     public void DeleteForward(string domain)
     {
-        var configPath = $"{ConfigDir}/{domain}";
-        var enabledPath = $"{EnabledDir}/{domain}";
+        _loggerMM?.Info("NginxService", "DeleteForward", $"Deleting forward configuration for domain: {domain}",
+            @params: new { domain },
+            tags: new[] { "nginx", "forward", "delete" });
 
-        _sshService.ExecuteCommand($"rm -f {enabledPath}");
-        _sshService.DeleteFile(configPath);
+        try
+        {
+            var configPath = $"{ConfigDir}/{domain}";
+            var enabledPath = $"{EnabledDir}/{domain}";
 
-        TestAndReloadNginx();
+            _sshService.ExecuteCommand($"rm -f {enabledPath}");
+            _sshService.DeleteFile(configPath);
+
+            TestAndReloadNginx();
+            InvalidateCache();
+
+            _loggerMM?.Info("NginxService", "DeleteForward", $"Forward configuration deleted successfully for domain: {domain}",
+                @params: new { domain },
+                tags: new[] { "nginx", "forward", "delete" });
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("NginxService", "DeleteForward", $"Failed to delete forward configuration for domain {domain}: {ex.Message}",
+                exception: ex,
+                @params: new { domain },
+                tags: new[] { "nginx", "forward", "delete", "error" });
+            throw;
+        }
     }
 
     public void RequestSsl(string domain)
     {
-        _sshService.ExecuteCommand($"certbot --nginx -d {domain} --non-interactive --agree-tos --email admin@denys.fast");
+        _loggerMM?.Info("NginxService", "RequestSsl", $"Requesting SSL certificate for domain: {domain}",
+            @params: new { domain },
+            tags: new[] { "nginx", "ssl", "certbot" });
+
+        try
+        {
+            _sshService.ExecuteCommand($"certbot --nginx -d {domain} --non-interactive --agree-tos --email admin@denys.fast");
+            InvalidateCache();
+
+            _loggerMM?.Info("NginxService", "RequestSsl", $"SSL certificate requested successfully for domain: {domain}",
+                @params: new { domain },
+                tags: new[] { "nginx", "ssl", "certbot" });
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("NginxService", "RequestSsl", $"Failed to request SSL certificate for domain {domain}: {ex.Message}",
+                exception: ex,
+                @params: new { domain },
+                tags: new[] { "nginx", "ssl", "certbot", "error" });
+            throw;
+        }
     }
 
     private void TestAndReloadNginx()
     {
-        // nginx -t writes output to stderr, so redirect stderr to stdout with 2>&1
-        var testResult = _sshService.ExecuteCommand("nginx -t 2>&1");
-        if (!testResult.Contains("successful"))
-        {
-            throw new Exception($"Nginx test failed:\n{testResult}");
-        }
+        // nginx -t outputs everything to stderr. SSH.NET captures stdout/stderr on separate channels,
+        // so "2>&1" does not reliably redirect in RunCommand. Instead, rely on exit code:
+        // ExecuteCommand throws if exit status != 0, so if we get past this line, the test passed.
+        _sshService.ExecuteCommand("nginx -t");
         _sshService.ExecuteCommand("systemctl reload nginx");
     }
 }

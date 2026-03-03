@@ -1,3 +1,4 @@
+using Logger_MM.Agent;
 using System.Text.RegularExpressions;
 using TunnelManager.Web.Models;
 
@@ -8,46 +9,87 @@ public class SshTunnelService
     private readonly SshService _sshService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SshTunnelService> _logger;
+    private readonly LoggerMMAgent? _loggerMM;
 
-    public SshTunnelService(SshService sshService, IConfiguration configuration, ILogger<SshTunnelService> logger)
+    // Cache
+    private List<SshTunnelConfig>? _cachedTunnels;
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private readonly object _cacheLock = new();
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(15);
+
+    public SshTunnelService(SshService sshService, IConfiguration configuration, ILogger<SshTunnelService> logger, LoggerMMAgent? loggerMM = null)
     {
         _sshService = sshService;
         _configuration = configuration;
         _logger = logger;
+        _loggerMM = loggerMM;
     }
 
     private string StreamDir => _configuration["Vps:NginxStreamDir"] ?? "/etc/nginx/stream.d";
     private int MinPort => int.Parse(_configuration["Vps:SshTunnelPortRange:Min"] ?? "2222");
     private int MaxPort => int.Parse(_configuration["Vps:SshTunnelPortRange:Max"] ?? "2299");
 
+    public void InvalidateCache()
+    {
+        lock (_cacheLock)
+        {
+            _cachedTunnels = null;
+            _cacheExpiry = DateTime.MinValue;
+        }
+    }
+
     public List<SshTunnelConfig> GetAllTunnels()
     {
+        // Return cached result if still valid
+        lock (_cacheLock)
+        {
+            if (_cachedTunnels != null && DateTime.UtcNow < _cacheExpiry)
+            {
+                return new List<SshTunnelConfig>(_cachedTunnels);
+            }
+        }
+
         var tunnels = new List<SshTunnelConfig>();
 
         try
         {
-            // Ensure stream.d directory exists
-            _sshService.CreateDirectory(StreamDir);
+            // Ensure stream.d directory exists + batch-read all configs in ONE command
+            var batchResult = _sshService.ExecuteCommand(
+                $"mkdir -p {StreamDir} && for f in {StreamDir}/*.conf; do [ -f \"$f\" ] && echo \"===FILE===$(basename $f)\" && cat \"$f\"; done 2>/dev/null || echo ''");
 
-            var result = _sshService.ExecuteCommand($"ls {StreamDir}/ 2>/dev/null || echo ''");
-            var files = result.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(f => f.EndsWith(".conf"))
-                .ToList();
-
-            foreach (var file in files)
+            if (!string.IsNullOrWhiteSpace(batchResult) && batchResult.Contains("===FILE==="))
             {
-                try
+                var sections = batchResult.Split("===FILE===", StringSplitOptions.RemoveEmptyEntries);
+                foreach (var section in sections)
                 {
-                    var config = GetTunnelConfig(file);
-                    if (config != null)
+                    var newlineIdx = section.IndexOf('\n');
+                    if (newlineIdx < 0) continue;
+
+                    var fileName = section[..newlineIdx].Trim();
+                    var content = section[(newlineIdx + 1)..];
+
+                    if (!fileName.EndsWith(".conf")) continue;
+
+                    try
                     {
-                        tunnels.Add(config);
+                        var config = ParseConfig(content, fileName);
+                        if (config != null)
+                        {
+                            tunnels.Add(config);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse tunnel config for {File}", fileName);
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to parse tunnel config for {File}", file);
-                }
+            }
+
+            // Update cache
+            lock (_cacheLock)
+            {
+                _cachedTunnels = new List<SshTunnelConfig>(tunnels);
+                _cacheExpiry = DateTime.UtcNow + CacheDuration;
             }
         }
         catch (Exception ex)
@@ -67,7 +109,7 @@ public class SshTunnelService
         }
 
         var content = _sshService.ReadFile(configPath);
-        return ParseConfig(content, name);
+        return ParseConfig(content, $"ssh-{name}.conf");
     }
 
     private SshTunnelConfig? ParseConfig(string content, string fileName)
@@ -112,118 +154,236 @@ public class SshTunnelService
 
     public void CreateTunnel(SshTunnelConfig config)
     {
-        // Ensure stream.d directory exists
-        _sshService.CreateDirectory(StreamDir);
+        _loggerMM?.Info("SshTunnelService", "CreateTunnel", $"Creating SSH tunnel: {config.Name}",
+            @params: new { name = config.Name, externalPort = config.ExternalPort, targetIp = config.TargetIp, targetPort = config.TargetPort },
+            tags: new[] { "tunnel", "create" });
+        
+        try
+        {
+            // Ensure stream.d directory exists
+            _sshService.CreateDirectory(StreamDir);
 
-        var configPath = $"{StreamDir}/ssh-{config.Name}.conf";
+            var configPath = $"{StreamDir}/ssh-{config.Name}.conf";
 
-        var nginxConfig = $@"server {{
+            var nginxConfig = $@"server {{
     listen {config.ExternalPort};
     proxy_pass {config.TargetIp}:{config.TargetPort};
     proxy_timeout 600s;
     proxy_connect_timeout 10s;
 }}";
 
-        _sshService.WriteFile(configPath, nginxConfig);
+            _sshService.WriteFile(configPath, nginxConfig);
 
-        // Open UFW port
-        _sshService.ExecuteCommand($"ufw allow {config.ExternalPort}/tcp");
+            // Open UFW port
+            _sshService.ExecuteCommand($"ufw allow {config.ExternalPort}/tcp");
 
-        // Ensure nginx stream module is configured (one-time setup)
-        EnsureStreamModuleConfigured();
+            // Ensure nginx stream module is configured (one-time setup)
+            EnsureStreamModuleConfigured();
 
-        // Test and reload
-        TestAndReloadNginx();
+            // Test and reload
+            TestAndReloadNginx();
+            InvalidateCache();
+            
+            _loggerMM?.Info("SshTunnelService", "CreateTunnel", $"SSH tunnel created successfully: {config.Name}",
+                @params: new { name = config.Name, externalPort = config.ExternalPort, targetIp = config.TargetIp, targetPort = config.TargetPort },
+                tags: new[] { "tunnel", "create" });
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("SshTunnelService", "CreateTunnel", $"Failed to create SSH tunnel {config.Name}: {ex.Message}",
+                exception: ex,
+                @params: new { name = config.Name, externalPort = config.ExternalPort, targetIp = config.TargetIp, targetPort = config.TargetPort },
+                tags: new[] { "tunnel", "create", "error" });
+            throw;
+        }
     }
 
     public void UpdateTunnel(string name, SshTunnelConfig config)
     {
-        var configPath = $"{StreamDir}/ssh-{name}.conf";
-        if (!_sshService.FileExists(configPath))
+        _loggerMM?.Info("SshTunnelService", "UpdateTunnel", $"Updating SSH tunnel: {name}",
+            @params: new { name, externalPort = config.ExternalPort, targetIp = config.TargetIp, targetPort = config.TargetPort },
+            tags: new[] { "tunnel", "update" });
+        
+        try
         {
-            throw new FileNotFoundException($"Tunnel not found: {name}");
-        }
+            var configPath = $"{StreamDir}/ssh-{name}.conf";
+            if (!_sshService.FileExists(configPath))
+            {
+                _loggerMM?.Error("SshTunnelService", "UpdateTunnel", $"Tunnel not found: {name}",
+                    @params: new { name },
+                    tags: new[] { "tunnel", "update", "error" });
+                throw new FileNotFoundException($"Tunnel not found: {name}");
+            }
 
-        var existingConfig = GetTunnelConfig(name);
-        if (existingConfig == null)
-        {
-            throw new Exception($"Failed to read existing tunnel config");
-        }
+            var existingConfig = GetTunnelConfig(name);
+            if (existingConfig == null)
+            {
+                _loggerMM?.Error("SshTunnelService", "UpdateTunnel", $"Failed to read existing tunnel config: {name}",
+                    @params: new { name },
+                    tags: new[] { "tunnel", "update", "error" });
+                throw new Exception($"Failed to read existing tunnel config");
+            }
 
-        // If port changed, update UFW
-        if (existingConfig.ExternalPort != config.ExternalPort)
-        {
-            _sshService.ExecuteCommand($"ufw delete allow {existingConfig.ExternalPort}/tcp");
-            _sshService.ExecuteCommand($"ufw allow {config.ExternalPort}/tcp");
-        }
+            // If port changed, update UFW
+            if (existingConfig.ExternalPort != config.ExternalPort)
+            {
+                _loggerMM?.Info("SshTunnelService", "UpdateTunnel", $"Port changed for tunnel {name}, updating UFW rules",
+                    @params: new { name, oldPort = existingConfig.ExternalPort, newPort = config.ExternalPort },
+                    tags: new[] { "tunnel", "update", "ufw" });
+                _sshService.ExecuteCommand($"ufw delete allow {existingConfig.ExternalPort}/tcp");
+                _sshService.ExecuteCommand($"ufw allow {config.ExternalPort}/tcp");
+            }
 
-        var nginxConfig = $@"server {{
+            var nginxConfig = $@"server {{
     listen {config.ExternalPort};
     proxy_pass {config.TargetIp}:{config.TargetPort};
     proxy_timeout 600s;
     proxy_connect_timeout 10s;
 }}";
 
-        _sshService.WriteFile(configPath, nginxConfig);
-        TestAndReloadNginx();
+            _sshService.WriteFile(configPath, nginxConfig);
+            TestAndReloadNginx();
+            InvalidateCache();
+            
+            _loggerMM?.Info("SshTunnelService", "UpdateTunnel", $"SSH tunnel updated successfully: {name}",
+                @params: new { name, externalPort = config.ExternalPort, targetIp = config.TargetIp, targetPort = config.TargetPort },
+                tags: new[] { "tunnel", "update" });
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("SshTunnelService", "UpdateTunnel", $"Failed to update SSH tunnel {name}: {ex.Message}",
+                exception: ex,
+                @params: new { name },
+                tags: new[] { "tunnel", "update", "error" });
+            throw;
+        }
     }
 
     public void DeleteTunnel(string name)
     {
-        var configPath = $"{StreamDir}/ssh-{name}.conf";
-        if (!_sshService.FileExists(configPath))
+        _loggerMM?.Info("SshTunnelService", "DeleteTunnel", $"Deleting SSH tunnel: {name}",
+            @params: new { name },
+            tags: new[] { "tunnel", "delete" });
+        
+        try
         {
-            return;
-        }
+            var configPath = $"{StreamDir}/ssh-{name}.conf";
+            if (!_sshService.FileExists(configPath))
+            {
+                _loggerMM?.Debug("SshTunnelService", "DeleteTunnel", $"Tunnel config file not found: {name}",
+                    @params: new { name },
+                    tags: new[] { "tunnel", "delete" });
+                return;
+            }
 
-        var config = GetTunnelConfig(name);
-        if (config != null)
+            var config = GetTunnelConfig(name);
+            if (config != null)
+            {
+                // Close UFW port
+                _loggerMM?.Debug("SshTunnelService", "DeleteTunnel", $"Removing UFW rule for port {config.ExternalPort}",
+                    @params: new { name, externalPort = config.ExternalPort },
+                    tags: new[] { "tunnel", "delete", "ufw" });
+                _sshService.ExecuteCommand($"ufw delete allow {config.ExternalPort}/tcp");
+            }
+
+            _sshService.DeleteFile(configPath);
+            TestAndReloadNginx();
+            InvalidateCache();
+            
+            _loggerMM?.Info("SshTunnelService", "DeleteTunnel", $"SSH tunnel deleted successfully: {name}",
+                @params: new { name },
+                tags: new[] { "tunnel", "delete" });
+        }
+        catch (Exception ex)
         {
-            // Close UFW port
-            _sshService.ExecuteCommand($"ufw delete allow {config.ExternalPort}/tcp");
+            _loggerMM?.Error("SshTunnelService", "DeleteTunnel", $"Failed to delete SSH tunnel {name}: {ex.Message}",
+                exception: ex,
+                @params: new { name },
+                tags: new[] { "tunnel", "delete", "error" });
+            throw;
         }
-
-        _sshService.DeleteFile(configPath);
-        TestAndReloadNginx();
     }
 
     private void EnsureStreamModuleConfigured()
     {
-        // Check if stream block exists in nginx.conf
-        var nginxConfPath = "/etc/nginx/nginx.conf";
-        var nginxConf = _sshService.ReadFile(nginxConfPath);
-
-        if (!nginxConf.Contains("stream {"))
+        _loggerMM?.Debug("SshTunnelService", "EnsureStreamModuleConfigured", "Checking if nginx stream module is configured",
+            tags: new[] { "tunnel", "nginx", "stream" });
+        
+        try
         {
-            // Add stream module load and stream block
-            var streamModuleLoad = "load_module /usr/lib/nginx/modules/ngx_stream_module.so;";
-            var streamBlock = @"
+            // Check if stream block exists in nginx.conf
+            var nginxConfPath = "/etc/nginx/nginx.conf";
+            var nginxConf = _sshService.ReadFile(nginxConfPath);
+
+            if (!nginxConf.Contains("stream {"))
+            {
+                _loggerMM?.Info("SshTunnelService", "EnsureStreamModuleConfigured", "Configuring nginx stream module",
+                    tags: new[] { "tunnel", "nginx", "stream" });
+                
+                // Add stream module load and stream block
+                var streamModuleLoad = "load_module /usr/lib/nginx/modules/ngx_stream_module.so;";
+                var streamBlock = @"
 stream {
     include /etc/nginx/stream.d/*.conf;
 }";
 
-            // Insert after http block
-            if (nginxConf.Contains("http {"))
-            {
-                nginxConf = nginxConf.Replace("http {", $"{streamModuleLoad}\n\nhttp {{");
-                nginxConf += streamBlock;
+                // Insert after http block
+                if (nginxConf.Contains("http {"))
+                {
+                    nginxConf = nginxConf.Replace("http {", $"{streamModuleLoad}\n\nhttp {{");
+                    nginxConf += streamBlock;
+                }
+                else
+                {
+                    nginxConf = streamModuleLoad + "\n" + nginxConf + streamBlock;
+                }
+
+                _sshService.WriteFile(nginxConfPath, nginxConf);
+                
+                _loggerMM?.Info("SshTunnelService", "EnsureStreamModuleConfigured", "Nginx stream module configured successfully",
+                    tags: new[] { "tunnel", "nginx", "stream" });
             }
             else
             {
-                nginxConf = streamModuleLoad + "\n" + nginxConf + streamBlock;
+                _loggerMM?.Debug("SshTunnelService", "EnsureStreamModuleConfigured", "Nginx stream module already configured",
+                    tags: new[] { "tunnel", "nginx", "stream" });
             }
-
-            _sshService.WriteFile(nginxConfPath, nginxConf);
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("SshTunnelService", "EnsureStreamModuleConfigured", $"Failed to configure nginx stream module: {ex.Message}",
+                exception: ex,
+                tags: new[] { "tunnel", "nginx", "stream", "error" });
+            throw;
         }
     }
 
     private void TestAndReloadNginx()
     {
-        var testResult = _sshService.ExecuteCommand("nginx -t");
-        if (!testResult.Contains("successful"))
+        _loggerMM?.Debug("SshTunnelService", "TestAndReloadNginx", "Testing nginx configuration",
+            tags: new[] { "tunnel", "nginx", "reload" });
+        
+        try
         {
-            throw new Exception($"Nginx test failed: {testResult}");
+            // nginx -t outputs everything to stderr. SSH.NET captures stdout/stderr on separate channels,
+            // so "2>&1" does not reliably redirect in RunCommand. Instead, rely on exit code:
+            // ExecuteCommand throws if exit status != 0, so if we get past this line, the test passed.
+            _sshService.ExecuteCommand("nginx -t");
+            
+            _loggerMM?.Debug("SshTunnelService", "TestAndReloadNginx", "Nginx configuration test successful, reloading",
+                tags: new[] { "tunnel", "nginx", "reload" });
+            
+            _sshService.ExecuteCommand("systemctl reload nginx");
+            
+            _loggerMM?.Info("SshTunnelService", "TestAndReloadNginx", "Nginx reloaded successfully",
+                tags: new[] { "tunnel", "nginx", "reload" });
         }
-        _sshService.ExecuteCommand("systemctl reload nginx");
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("SshTunnelService", "TestAndReloadNginx", $"Failed to test and reload nginx: {ex.Message}",
+                exception: ex,
+                tags: new[] { "tunnel", "nginx", "reload", "error" });
+            throw;
+        }
     }
 }

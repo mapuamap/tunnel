@@ -1,9 +1,12 @@
 @page "/"
 @using Microsoft.AspNetCore.Authorization
+@using Logger_MM.Agent
 @attribute [Authorize]
 @inject NginxService NginxService
 @inject WireGuardService WireGuardService
 @inject SshTunnelService SshTunnelService
+@inject LoggerMMAgent? LoggerMM
+@inject AuthenticationStateProvider AuthStateProvider
 
 <PageTitle>Dashboard - Tunnel Manager</PageTitle>
 
@@ -122,51 +125,61 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
+        LoggerMM?.Info("Dashboard", "OnInitializedAsync", "Dashboard page loaded",
+            user: user,
+            tags: new[] { "dashboard", "page-load" });
+        
         await LoadData();
     }
 
     private async Task LoadData()
     {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User.Identity?.Name ?? "unknown";
+        
         try
         {
             _loading = true;
-            await Task.Run(() =>
+            StateHasChanged();
+
+            // Run all three data fetches in PARALLEL instead of sequentially
+            var wgTask = Task.Run(() =>
             {
-                try
-                {
-                    _wgStatus = WireGuardService.GetStatus();
-                }
-                catch
-                {
-                    _wgStatus = new WireGuardStatus { IsRunning = false };
-                }
+                try { return WireGuardService.GetStatus(); }
+                catch { return new WireGuardStatus { IsRunning = false }; }
             });
-            await Task.Run(() =>
+            var fwdTask = Task.Run(() =>
             {
-                try
-                {
-                    _forwards = NginxService.GetAllForwards();
-                }
-                catch
-                {
-                    _forwards = new List<ForwardConfig>();
-                }
+                try { return NginxService.GetAllForwards(); }
+                catch { return new List<ForwardConfig>(); }
             });
-            await Task.Run(() =>
+            var tunnelTask = Task.Run(() =>
             {
-                try
-                {
-                    _sshTunnels = SshTunnelService.GetAllTunnels();
-                }
-                catch
-                {
-                    _sshTunnels = new List<SshTunnelConfig>();
-                }
+                try { return SshTunnelService.GetAllTunnels(); }
+                catch { return new List<SshTunnelConfig>(); }
             });
+
+            await Task.WhenAll(wgTask, fwdTask, tunnelTask);
+
+            _wgStatus = wgTask.Result;
+            _forwards = fwdTask.Result;
+            _sshTunnels = tunnelTask.Result;
+            
+            LoggerMM?.Info("Dashboard", "LoadData", "Dashboard data loaded successfully",
+                user: user,
+                @params: new { forwardCount = _forwards.Count, tunnelCount = _sshTunnels.Count, wireGuardRunning = _wgStatus.IsRunning },
+                tags: new[] { "dashboard", "data-load" });
         }
-        catch
+        catch (Exception ex)
         {
-            // Log error - set defaults
+            LoggerMM?.Error("Dashboard", "LoadData", $"Failed to load dashboard data: {ex.Message}",
+                user: user,
+                exception: ex,
+                tags: new[] { "dashboard", "data-load", "error" });
+            
             _wgStatus = new WireGuardStatus { IsRunning = false };
             _forwards = new List<ForwardConfig>();
             _sshTunnels = new List<SshTunnelConfig>();

@@ -1,3 +1,4 @@
+using Logger_MM.Agent;
 using System.Text.RegularExpressions;
 
 namespace TunnelManager.Web.Services;
@@ -6,23 +7,37 @@ public class WireGuardService
 {
     private readonly SshService _sshService;
     private readonly ILogger<WireGuardService> _logger;
+    private readonly LoggerMMAgent? _loggerMM;
 
-    public WireGuardService(SshService sshService, ILogger<WireGuardService> logger)
+    public WireGuardService(SshService sshService, ILogger<WireGuardService> logger, LoggerMMAgent? loggerMM = null)
     {
         _sshService = sshService;
         _logger = logger;
+        _loggerMM = loggerMM;
     }
 
     public WireGuardStatus GetStatus()
     {
+        _loggerMM?.Debug("WireGuardService", "GetStatus", "Getting WireGuard status",
+            tags: new[] { "wireguard", "status" });
+        
         try
         {
             var result = _sshService.ExecuteCommand("wg show 2>&1");
-            return ParseStatus(result);
+            var status = ParseStatus(result);
+            
+            _loggerMM?.Info("WireGuardService", "GetStatus", $"WireGuard status retrieved: Running={status.IsRunning}, Peers={status.PeerCount}",
+                @params: new { isRunning = status.IsRunning, peerCount = status.PeerCount, interfaceName = status.InterfaceName },
+                tags: new[] { "wireguard", "status" });
+            
+            return status;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get WireGuard status");
+            _loggerMM?.Error("WireGuardService", "GetStatus", $"Failed to get WireGuard status: {ex.Message}",
+                exception: ex,
+                tags: new[] { "wireguard", "status", "error" });
             return new WireGuardStatus { IsRunning = false };
         }
     }
