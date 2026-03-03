@@ -124,7 +124,7 @@
                     catch (Exception sslEx)
                     {
                         Snackbar.Add($"Forward saved but SSL failed: {sslEx.Message}", Severity.Warning);
-                        LoggerMM?.Warning("ForwardEdit", "Save", $"SSL request failed for {_domain}: {sslEx.Message}",
+                        LoggerMM?.Error("ForwardEdit", "Save", $"SSL request failed for {_domain}: {sslEx.Message}",
                             user: user,
                             exception: sslEx,
                             @params: new { domain = _domain },
@@ -154,7 +154,7 @@
                     catch (Exception sslEx)
                     {
                         Snackbar.Add($"Forward created but SSL failed: {sslEx.Message}", Severity.Warning);
-                        LoggerMM?.Warning("ForwardEdit", "Save", $"SSL request failed for new forward {_domain}: {sslEx.Message}",
+                        LoggerMM?.Error("ForwardEdit", "Save", $"SSL request failed for new forward {_domain}: {sslEx.Message}",
                             user: user,
                             exception: sslEx,
                             @params: new { domain = _domain },
