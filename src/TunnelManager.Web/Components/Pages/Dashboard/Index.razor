@@ -1,0 +1,192 @@
+@page "/"
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize]
+@inject NginxService NginxService
+@inject WireGuardService WireGuardService
+@inject SshTunnelService SshTunnelService
+
+<PageTitle>Dashboard - Tunnel Manager</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Dashboard</MudText>
+
+@if (_loading)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-4" />
+}
+else
+{
+    <MudGrid>
+        <MudItem xs="12" sm="6" md="3">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <MudText Typo="Typo.h6">WireGuard Status</MudText>
+                    <MudText Typo="Typo.body1" Class="mt-2">
+                        @if (_wgStatus.IsRunning)
+                        {
+                            <MudChip Color="Color.Success" Size="Size.Small">Running</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip Color="Color.Error" Size="Size.Small">Stopped</MudChip>
+                        }
+                    </MudText>
+                    @if (_wgStatus.IsRunning)
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-2">Peers: @_wgStatus.PeerCount</MudText>
+                    }
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <MudText Typo="Typo.h6">HTTP Forwards</MudText>
+                    <MudText Typo="Typo.h4" Class="mt-2">@_forwards.Count</MudText>
+                    <MudText Typo="Typo.caption">@_forwards.Count(f => f.HasSsl) with SSL</MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <MudText Typo="Typo.h6">SSH Tunnels</MudText>
+                    <MudText Typo="Typo.h4" Class="mt-2">@_sshTunnels.Count</MudText>
+                    <MudText Typo="Typo.caption">Active tunnels</MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="12" sm="6" md="3">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <MudText Typo="Typo.h6">Protected Forwards</MudText>
+                    <MudText Typo="Typo.h4" Class="mt-2">@_forwards.Count(f => f.HasAuth)</MudText>
+                    <MudText Typo="Typo.caption">With Basic Auth</MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+    </MudGrid>
+
+    <MudGrid Class="mt-4">
+        <MudItem xs="12">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <MudText Typo="Typo.h6" Class="mb-4">WireGuard Details</MudText>
+                    @if (_wgStatus.IsRunning)
+                    {
+                        <MudSimpleTable>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Interface:</strong></td>
+                                    <td>@_wgStatus.InterfaceName</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Peers:</strong></td>
+                                    <td>@_wgStatus.PeerCount</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Bytes Received:</strong></td>
+                                    <td>@FormatBytes(_wgStatus.BytesReceived)</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Bytes Sent:</strong></td>
+                                    <td>@FormatBytes(_wgStatus.BytesSent)</td>
+                                </tr>
+                                @if (!string.IsNullOrEmpty(_wgStatus.LatestHandshake))
+                                {
+                                    <tr>
+                                        <td><strong>Latest Handshake:</strong></td>
+                                        <td>@_wgStatus.LatestHandshake</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Class="text-error">WireGuard is not running</MudText>
+                    }
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private bool _loading = true;
+    private WireGuardStatus _wgStatus = new();
+    private List<ForwardConfig> _forwards = new();
+    private List<SshTunnelConfig> _sshTunnels = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        try
+        {
+            _loading = true;
+            await Task.Run(() =>
+            {
+                try
+                {
+                    _wgStatus = WireGuardService.GetStatus();
+                }
+                catch
+                {
+                    _wgStatus = new WireGuardStatus { IsRunning = false };
+                }
+            });
+            await Task.Run(() =>
+            {
+                try
+                {
+                    _forwards = NginxService.GetAllForwards();
+                }
+                catch
+                {
+                    _forwards = new List<ForwardConfig>();
+                }
+            });
+            await Task.Run(() =>
+            {
+                try
+                {
+                    _sshTunnels = SshTunnelService.GetAllTunnels();
+                }
+                catch
+                {
+                    _sshTunnels = new List<SshTunnelConfig>();
+                }
+            });
+        }
+        catch
+        {
+            // Log error - set defaults
+            _wgStatus = new WireGuardStatus { IsRunning = false };
+            _forwards = new List<ForwardConfig>();
+            _sshTunnels = new List<SshTunnelConfig>();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string FormatBytes(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+}

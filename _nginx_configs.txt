@@ -1,0 +1,158 @@
+# Nginx configurations for all services
+
+# 1. n8n.denys.fast -> 192.168.66.150:5678
+server {
+    listen 80;
+    server_name n8n.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.150:5678;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+# 2. gpu.denys.fast -> 192.168.66.142:5000
+server {
+    listen 80;
+    server_name gpu.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.142:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 3. apigencomf.denys.fast -> 192.168.66.142:8188
+server {
+    listen 80;
+    server_name apigencomf.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.142:8188;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 4. simuqlator.denys.fast -> 192.168.66.154:80
+server {
+    listen 80;
+    server_name simuqlator.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.154:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 5. tg.denys.fast -> 192.168.66.154:5000
+server {
+    listen 80;
+    server_name tg.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.154:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 6. llm.denys.fast -> 192.168.66.154:3000
+server {
+    listen 80;
+    server_name llm.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.154:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 7. interfaceblob.denys.fast -> 192.168.66.154:6001
+server {
+    listen 80;
+    server_name interfaceblob.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.154:6001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 8. comfy1.denys.fast -> 192.168.66.142:8187
+server {
+    listen 80;
+    server_name comfy1.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.142:8187;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 9. vllm.denys.fast -> 192.168.66.142:8000
+server {
+    listen 80;
+    server_name vllm.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.142:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 10. server1.denys.fast -> 192.168.66.141:8006
+server {
+    listen 80;
+    server_name server1.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.141:8006;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# 11. server1gpu.denys.fast -> 192.168.66.142:5001
+server {
+    listen 80;
+    server_name server1gpu.denys.fast;
+    
+    location / {
+        proxy_pass http://192.168.66.142:5001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

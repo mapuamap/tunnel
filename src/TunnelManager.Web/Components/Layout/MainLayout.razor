@@ -1,0 +1,97 @@
+﻿@inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Authorization
+
+<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Class="app-bar">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="@ToggleDrawer" />
+        <MudText Typo="Typo.h5" Class="ml-3 app-title">
+            <span class="title-tunnel">Tunnel</span> Manager
+        </MudText>
+        <MudSpacer />
+        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Color="Color.Inherit" OnClick="@RefreshPage" Title="Refresh" />
+        <MudIconButton Icon="@Icons.Material.Filled.Logout" Color="Color.Inherit" OnClick="@Logout" Title="Logout" />
+    </MudAppBar>
+
+    <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="2" Class="drawer">
+        <NavMenu />
+    </MudDrawer>
+
+    <MudMainContent Class="main-content" Style="overflow-y: auto; height: calc(100vh - 64px);">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-6" Style="min-height: 100%; padding-bottom: 48px;">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private bool _drawerOpen = true;
+
+    private MudTheme _theme = new()
+    {
+        PaletteDark = new PaletteDark()
+        {
+            Primary = "#4C9AFF",
+            Secondary = "#7B68EE",
+            Background = "#0A1929",
+            Surface = "#132F4C",
+            AppbarBackground = "#0D2137",
+            DrawerBackground = "#0B1A2E",
+            TextPrimary = "#ffffff",
+            TextSecondary = "#b0b0c0",
+            ActionDefault = "#4C9AFF",
+            ActionDisabled = "#505070",
+            Divider = "#2a2a4a",
+            Error = "#ff4444",
+            Success = "#00ff88",
+            Warning = "#ffaa00",
+            Info = "#4C9AFF"
+        },
+        Typography = new Typography()
+        {
+            Default = new Default()
+            {
+                FontFamily = new[] { "Space Grotesk", "sans-serif" }
+            },
+            H1 = new H1() { FontWeight = 700 },
+            H2 = new H2() { FontWeight = 700 },
+            H3 = new H3() { FontWeight = 600 },
+            H4 = new H4() { FontWeight = 600 },
+            H5 = new H5() { FontWeight = 600 },
+            H6 = new H6() { FontWeight = 600 },
+            Body1 = new Body1() { FontFamily = new[] { "Space Grotesk", "sans-serif" } },
+            Body2 = new Body2() { FontFamily = new[] { "Space Grotesk", "sans-serif" } },
+            Caption = new Caption() { FontFamily = new[] { "JetBrains Mono", "monospace" } }
+        }
+    };
+
+    private void ToggleDrawer()
+    {
+        _drawerOpen = !_drawerOpen;
+    }
+
+    private void RefreshPage()
+    {
+        StateHasChanged();
+    }
+
+    private void Logout()
+    {
+        NavigationManager.NavigateTo("/api/auth/logout-redirect", forceLoad: true);
+    }
+
+    [Inject] private NavigationManager NavigationManager { get; set; } = default!;
+}
+
+<style>
+    .title-tunnel {
+        background: linear-gradient(135deg, #4C9AFF, #7B68EE);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+</style>

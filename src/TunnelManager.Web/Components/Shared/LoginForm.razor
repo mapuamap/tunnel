@@ -1,0 +1,206 @@
+@inject NavigationManager Navigation
+
+<div class="login-container">
+    <div class="login-bg"></div>
+    <MudPaper Class="login-card pa-8" Elevation="8">
+        <div class="login-header mb-6">
+            <MudText Typo="Typo.h4" Class="login-title">
+                <span class="title-tunnel">Tunnel</span> Manager
+            </MudText>
+            <MudText Typo="Typo.body2" Class="text-secondary">Sign in to manage your tunnels</MudText>
+        </div>
+
+        <form method="post" action="/api/auth/login-form">
+            <input type="hidden" name="returnUrl" value="@GetReturnUrl()" />
+            
+            <div class="form-group mb-4">
+                <label class="form-label">Username</label>
+                <div class="input-wrapper">
+                    <MudIcon Icon="@Icons.Material.Filled.Person" Class="input-icon" />
+                    <input type="text" name="username" class="form-input" 
+                           placeholder="Enter username" required autocomplete="username" />
+                </div>
+            </div>
+            
+            <div class="form-group mb-4">
+                <label class="form-label">Password</label>
+                <div class="input-wrapper">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Class="input-icon" />
+                    <input type="password" name="password" class="form-input" 
+                           placeholder="Enter password" required autocomplete="current-password" />
+                </div>
+            </div>
+            
+            @if (!string.IsNullOrEmpty(Error))
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-4">@Error</MudAlert>
+            }
+
+            <MudButton ButtonType="ButtonType.Submit" 
+                       Variant="Variant.Filled" 
+                       Color="Color.Primary"
+                       FullWidth="true"
+                       Size="Size.Large"
+                       Class="login-button">
+                Sign In
+            </MudButton>
+        </form>
+    </MudPaper>
+</div>
+
+<style>
+    .login-container {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .login-bg {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: 
+            radial-gradient(circle at 20% 80%, rgba(76, 154, 255, 0.15) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, rgba(123, 104, 238, 0.15) 0%, transparent 50%),
+            linear-gradient(135deg, #0A1929 0%, #132F4C 100%);
+        z-index: 0;
+    }
+    
+    .login-card {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        max-width: 420px;
+        background: linear-gradient(135deg, rgba(19, 47, 76, 0.95) 0%, rgba(13, 33, 55, 0.95) 100%);
+        border: 1px solid #2a2a4a;
+        border-radius: 16px;
+        backdrop-filter: blur(20px);
+    }
+    
+    .login-header {
+        text-align: center;
+    }
+    
+    .login-title {
+        font-weight: 700;
+    }
+    
+    .title-tunnel {
+        background: linear-gradient(135deg, #4C9AFF, #7B68EE);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    .text-secondary {
+        color: #b0b0c0;
+    }
+    
+    .form-group {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .form-label {
+        color: #b0b0c0;
+        font-size: 0.875rem;
+        margin-bottom: 8px;
+    }
+    
+    .input-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    
+    .input-icon {
+        position: absolute;
+        left: 12px;
+        color: #606080;
+        font-size: 20px;
+    }
+    
+    .form-input {
+        width: 100%;
+        padding: 14px 14px 14px 44px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid #3a3a5a;
+        border-radius: 8px;
+        color: #ffffff;
+        font-size: 1rem;
+        font-family: inherit;
+        transition: all 0.2s ease;
+    }
+    
+    .form-input:focus {
+        outline: none;
+        border-color: #4C9AFF;
+        background: rgba(76, 154, 255, 0.05);
+    }
+    
+    .form-input::placeholder {
+        color: #606080;
+    }
+    
+    .login-button {
+        background: linear-gradient(135deg, #4C9AFF, #3a7acc) !important;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        height: 48px;
+    }
+    
+    .login-button:hover {
+        background: linear-gradient(135deg, #5caaff, #4a8add) !important;
+    }
+</style>
+
+@code {
+    [Parameter]
+    public string? ReturnUrl { get; set; }
+    
+    [Parameter]
+    public string? Error { get; set; }
+    
+    private string GetReturnUrl()
+    {
+        if (!string.IsNullOrEmpty(ReturnUrl))
+        {
+            try
+            {
+                var uri = new Uri(ReturnUrl, UriKind.RelativeOrAbsolute);
+                var path = uri.IsAbsoluteUri ? uri.PathAndQuery : ReturnUrl;
+                
+                if (path.StartsWith("/login", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "/";
+                }
+                return path;
+            }
+            catch
+            {
+                return "/";
+            }
+        }
+        
+        try
+        {
+            var uri = new Uri(Navigation.Uri);
+            var path = uri.PathAndQuery;
+            
+            if (path.StartsWith("/login", StringComparison.OrdinalIgnoreCase))
+            {
+                return "/";
+            }
+            return path;
+        }
+        catch
+        {
+            return "/";
+        }
+    }
+}

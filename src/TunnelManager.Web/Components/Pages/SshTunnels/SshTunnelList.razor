@@ -1,0 +1,131 @@
+@page "/ssh-tunnels"
+@using Microsoft.AspNetCore.Authorization
+@using TunnelManager.Web.Components.Shared
+@attribute [Authorize]
+@inject SshTunnelService SshTunnelService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>SSH Tunnels - Tunnel Manager</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">SSH Tunnels</MudText>
+
+<MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="OpenAddDialog" Class="mb-4">
+    Add SSH Tunnel
+</MudButton>
+
+@if (_loading)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudTable Items="@_tunnels" Hover="true" Striped="true" Dense="true">
+        <HeaderContent>
+            <MudTh>Name</MudTh>
+            <MudTh>External Port</MudTh>
+            <MudTh>Target</MudTh>
+            <MudTh>Status</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Name">@context.Name</MudTd>
+            <MudTd DataLabel="External Port">
+                <MudChip Color="Color.Info" Size="Size.Small">@context.ExternalPort</MudChip>
+            </MudTd>
+            <MudTd DataLabel="Target">@context.TargetIp:@context.TargetPort</MudTd>
+            <MudTd DataLabel="Status">
+                @if (context.IsEnabled)
+                {
+                    <MudChip Color="Color.Success" Size="Size.Small">Enabled</MudChip>
+                }
+                else
+                {
+                    <MudChip Color="Color.Error" Size="Size.Small">Disabled</MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="Actions">
+                <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialog(context)" />
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteTunnel(context)" />
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private bool _loading = true;
+    private List<SshTunnelConfig> _tunnels = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTunnels();
+    }
+
+    private async Task LoadTunnels()
+    {
+        try
+        {
+            _loading = true;
+            _tunnels = SshTunnelService.GetAllTunnels();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading tunnels: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenAddDialog()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var parameters = new DialogParameters { ["Tunnel"] = new SshTunnelConfig() };
+        var dialog = await DialogService.ShowAsync<SshTunnelEdit>("Add SSH Tunnel", parameters, options);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            await LoadTunnels();
+        }
+    }
+
+    private async Task OpenEditDialog(SshTunnelConfig tunnel)
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var parameters = new DialogParameters { ["Tunnel"] = tunnel };
+        var dialog = await DialogService.ShowAsync<SshTunnelEdit>("Edit SSH Tunnel", parameters, options);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            await LoadTunnels();
+        }
+    }
+
+    private async Task DeleteTunnel(SshTunnelConfig tunnel)
+    {
+        var parameters = new DialogParameters
+        {
+            ["ContentText"] = $"Are you sure you want to delete SSH tunnel '{tunnel.Name}' (port {tunnel.ExternalPort})?",
+            ["ButtonText"] = "Delete",
+            ["Color"] = Color.Error
+        };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Delete", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            try
+            {
+                SshTunnelService.DeleteTunnel(tunnel.Name);
+                Snackbar.Add($"SSH tunnel '{tunnel.Name}' deleted", Severity.Success);
+                await LoadTunnels();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error deleting tunnel: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

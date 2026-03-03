@@ -1,0 +1,116 @@
+@echo off
+chcp 65001 >nul
+setlocal EnableDelayedExpansion
+
+:: ===== CONFIGURATION =====
+set VM_HOST=192.168.66.154
+set VM_USER=expmap
+set VM_PROJECT_PATH=/home/expmap/tunnelmanager
+if "%GIT_TOKEN%"=="" (
+    echo [ERROR] GIT_TOKEN environment variable is not set!
+    echo Please set it: set GIT_TOKEN=your_token_here
+    pause
+    exit /b 1
+)
+set GIT_REPO=github.com/mapuamap/tunnel.git
+set SERVICE_NAME=tunnelmanager
+set APP_PORT=5100
+
+:: Get script directory and project root
+set "SCRIPT_DIR=%~dp0"
+set "PROJECT_ROOT=%SCRIPT_DIR%.."
+cd /d "%PROJECT_ROOT%"
+
+echo.
+echo ========================================
+echo  Tunnel Manager Deploy
+echo ========================================
+echo.
+
+:: ===== STEP 1: BUILD =====
+echo [1/4] Building project...
+cd src\TunnelManager.Web
+dotnet build -c Release
+if errorlevel 1 (
+    echo [ERROR] Build failed!
+    pause
+    exit /b 1
+)
+cd ..\..
+echo [OK] Build successful!
+echo.
+
+:: ===== STEP 2: COMMIT & PUSH =====
+echo [2/4] Git Commit ^& Push...
+echo.
+
+:: Check for uncommitted changes
+git status --porcelain > temp_status.txt
+findstr /R /C:"^[^?]" temp_status.txt >nul
+if errorlevel 1 (
+    echo [INFO] No changes to commit
+    del temp_status.txt
+) else (
+    echo [INFO] Found uncommitted changes
+    git add -A
+    setlocal EnableDelayedExpansion
+    set "COMMIT_MSG=auto deploy"
+    if not "%~1"=="" (
+        set "COMMIT_MSG=%~1"
+    )
+    if "!COMMIT_MSG!"=="" (
+        set "COMMIT_MSG=auto deploy"
+    )
+    echo [INFO] Commit message: !COMMIT_MSG!
+    git commit -m "!COMMIT_MSG!" --no-verify
+    if errorlevel 1 (
+        echo [ERROR] Commit failed!
+        del temp_status.txt
+        pause
+        exit /b 1
+    )
+    del temp_status.txt
+)
+
+echo.
+echo [PUSH] Pushing to remote...
+git push -u origin master 2>nul
+if errorlevel 1 (
+    git push
+    if errorlevel 1 (
+        echo [ERROR] Push failed!
+        pause
+        exit /b 1
+    )
+)
+echo [OK] Push successful!
+echo.
+
+:: ===== STEP 3: DEPLOY TO VM =====
+echo [3/4] Deploying to VM (%VM_HOST%)...
+echo.
+
+setlocal DisableDelayedExpansion
+
+ssh %VM_USER%@%VM_HOST% "sudo git config --global --add safe.directory %VM_PROJECT_PATH% 2>/dev/null; if [ ! -d %VM_PROJECT_PATH%/.git ]; then echo [INIT] Cloning repository...; sudo rm -rf %VM_PROJECT_PATH%; sudo git clone https://%GIT_TOKEN%@%GIT_REPO% %VM_PROJECT_PATH%; fi && cd %VM_PROJECT_PATH% && echo [CLEAN] Removing build artifacts... && sudo rm -rf obj bin src/*/obj src/*/bin publish && echo [GIT] Pulling latest... && sudo git fetch https://%GIT_TOKEN%@%GIT_REPO% main && sudo git reset --hard FETCH_HEAD && echo [BUILD] Publishing... && sudo /root/.dotnet/dotnet publish src/TunnelManager.Web/TunnelManager.Web.csproj -c Release -o %VM_PROJECT_PATH%/publish && echo [SERVICE] Restarting... && sudo systemctl restart %SERVICE_NAME% && echo [OK] Service restarted"
+
+endlocal
+
+if errorlevel 1 (
+    echo [ERROR] Deployment failed!
+    pause
+    exit /b 1
+)
+
+echo.
+echo ========================================
+echo  DEPLOYMENT COMPLETE!
+echo ========================================
+echo.
+echo  Tunnel Manager
+echo  App: http://%VM_HOST%:%APP_PORT%
+echo.
+echo ========================================
+
+pause
+exit /b 0

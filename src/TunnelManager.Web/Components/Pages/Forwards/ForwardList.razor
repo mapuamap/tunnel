@@ -1,0 +1,219 @@
+@page "/forwards"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using TunnelManager.Web.Components.Shared
+@using TunnelManager.Web.Components.Pages.Forwards
+@attribute [Authorize]
+@inject NginxService NginxService
+@inject NginxAuthService NginxAuthService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<ForwardList> Logger
+
+<PageTitle>HTTP Forwards - Tunnel Manager</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">HTTP Forwards</MudText>
+
+<MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="OpenAddDialog" Class="mb-4">
+    Add Forward
+</MudButton>
+
+@if (_loading)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudTable Items="@_forwards" Hover="true" Striped="true" Dense="true">
+        <HeaderContent>
+            <MudTh>Domain</MudTh>
+            <MudTh>Target</MudTh>
+            <MudTh>SSL</MudTh>
+            <MudTh>Auth</MudTh>
+            <MudTh>WebSocket</MudTh>
+            <MudTh>Status</MudTh>
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Domain">@context.Domain</MudTd>
+            <MudTd DataLabel="Target">@context.Target</MudTd>
+            <MudTd DataLabel="SSL">
+                @if (context.HasSsl)
+                {
+                    <MudChip Color="Color.Success" Size="Size.Small">Yes</MudChip>
+                }
+                else
+                {
+                    <MudChip Color="Color.Default" Size="Size.Small">No</MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="Auth">
+                @if (context.HasAuth)
+                {
+                    <MudChip Color="Color.Info" Size="Size.Small">Yes</MudChip>
+                }
+                else
+                {
+                    <MudChip Color="Color.Default" Size="Size.Small">No</MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="WebSocket">
+                @if (context.HasWebSocket)
+                {
+                    <MudChip Color="Color.Warning" Size="Size.Small">Yes</MudChip>
+                }
+                else
+                {
+                    <MudChip Color="Color.Default" Size="Size.Small">No</MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="Status">
+                @if (context.IsEnabled)
+                {
+                    <MudChip Color="Color.Success" Size="Size.Small">Enabled</MudChip>
+                }
+                else
+                {
+                    <MudChip Color="Color.Error" Size="Size.Small">Disabled</MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="Actions">
+                <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialog(context)" Title="Edit" />
+                <MudIconButton Icon="@Icons.Material.Filled.Security" Color="Color.Info" Size="Size.Small" OnClick="() => OpenAuthDialog(context)" Title="Manage Auth" />
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteForward(context)" Title="Delete" />
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private bool _loading = true;
+    private List<ForwardConfig> _forwards = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadForwards();
+    }
+
+    private async Task LoadForwards()
+    {
+        try
+        {
+            _loading = true;
+            _forwards = NginxService.GetAllForwards();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading forwards: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenAddDialog()
+    {
+        try
+        {
+            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+            var parameters = new DialogParameters { ["Forward"] = new ForwardConfig() };
+            var dialog = await DialogService.ShowAsync<ForwardEdit>("Add Forward", parameters, options);
+            var result = await dialog.Result;
+            if (!result.Canceled)
+            {
+                await LoadForwards();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenEditDialog(ForwardConfig forward)
+    {
+        try
+        {
+            var options = new DialogOptions 
+            { 
+                CloseOnEscapeKey = true, 
+                MaxWidth = MaxWidth.Medium, 
+                FullWidth = true
+            };
+            var parameters = new DialogParameters { ["Forward"] = forward };
+            var dialog = await DialogService.ShowAsync<ForwardEdit>("Edit Forward", parameters, options);
+            var result = await dialog.Result;
+            if (!result.Canceled)
+            {
+                await LoadForwards();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenAuthDialog(ForwardConfig forward)
+    {
+        try
+        {
+            var options = new DialogOptions 
+            { 
+                CloseOnEscapeKey = true, 
+                MaxWidth = MaxWidth.Medium, 
+                FullWidth = true
+            };
+            var parameters = new DialogParameters { ["Domain"] = forward.Domain };
+            var dialog = await DialogService.ShowAsync<AuthManage>("Manage Auth", parameters, options);
+            var result = await dialog.Result;
+            if (!result.Canceled)
+            {
+                await LoadForwards();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteForward(ForwardConfig forward)
+    {
+        try
+        {
+            var parameters = new DialogParameters
+            {
+                ["ContentText"] = $"Are you sure you want to delete forward for {forward.Domain}?",
+                ["ButtonText"] = "Delete",
+                ["Color"] = Color.Error
+            };
+            var options = new DialogOptions 
+            { 
+                CloseButton = true, 
+                MaxWidth = MaxWidth.ExtraSmall
+            };
+            var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Delete", parameters, options);
+            var result = await dialog.Result;
+
+            if (!result.Canceled)
+            {
+                try
+                {
+                    NginxService.DeleteForward(forward.Domain);
+                    Snackbar.Add($"Forward {forward.Domain} deleted", Severity.Success);
+                    await LoadForwards();
+                }
+                catch (Exception ex)
+                {
+                    Snackbar.Add($"Error deleting forward: {ex.Message}", Severity.Error);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+}

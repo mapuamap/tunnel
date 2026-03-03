@@ -1,0 +1,98 @@
+@using TunnelManager.Web.Models
+@inject SshTunnelService SshTunnelService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="_tunnel.Name" Label="Name" Required="true" Variant="Variant.Outlined" HelperText="Unique identifier for this tunnel" />
+        <MudTextField @bind-Value="_tunnel.TargetIp" Label="Target IP" Required="true" Variant="Variant.Outlined" HelperText="Internal IP address (e.g., 192.168.66.160)" />
+        <MudNumericField @bind-Value="_tunnel.TargetPort" Label="Target Port" Variant="Variant.Outlined" Min="1" Max="65535" />
+        <MudNumericField @bind-Value="_tunnel.ExternalPort" Label="External Port" Variant="Variant.Outlined" Min="2222" Max="2299" HelperText="Port on VPS (2222-2299)" />
+        @if (!_isEdit)
+        {
+            <MudButton Color="Color.Info" Variant="Variant.Outlined" OnClick="AutoAssignPort" Class="mt-2">Auto-assign Port</MudButton>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public SshTunnelConfig Tunnel { get; set; } = new();
+
+    private SshTunnelConfig _tunnel = new();
+    private bool _isEdit = false;
+
+    protected override void OnInitialized()
+    {
+        _tunnel = Tunnel;
+        _isEdit = !string.IsNullOrEmpty(_tunnel.Name);
+        if (!_isEdit)
+        {
+            _tunnel.TargetPort = 22; // Default SSH port
+            _tunnel.ExternalPort = SshTunnelService.GetNextAvailablePort();
+        }
+    }
+
+    private void AutoAssignPort()
+    {
+        try
+        {
+            _tunnel.ExternalPort = SshTunnelService.GetNextAvailablePort();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
+    private async Task Save()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_tunnel.Name) || string.IsNullOrWhiteSpace(_tunnel.TargetIp))
+            {
+                Snackbar.Add("Name and Target IP are required", Severity.Warning);
+                return;
+            }
+
+            if (!System.Net.IPAddress.TryParse(_tunnel.TargetIp, out _))
+            {
+                Snackbar.Add("Invalid IP address", Severity.Warning);
+                return;
+            }
+
+            if (_tunnel.ExternalPort < 2222 || _tunnel.ExternalPort > 2299)
+            {
+                Snackbar.Add("External port must be between 2222 and 2299", Severity.Warning);
+                return;
+            }
+
+            if (_isEdit)
+            {
+                SshTunnelService.UpdateTunnel(_tunnel.Name, _tunnel);
+                Snackbar.Add($"SSH tunnel '{_tunnel.Name}' updated", Severity.Success);
+            }
+            else
+            {
+                SshTunnelService.CreateTunnel(_tunnel);
+                Snackbar.Add($"SSH tunnel '{_tunnel.Name}' created", Severity.Success);
+            }
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+}

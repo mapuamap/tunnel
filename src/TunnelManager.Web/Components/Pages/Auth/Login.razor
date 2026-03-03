@@ -1,0 +1,17 @@
+@page "/login"
+@layout EmptyLayout
+@using Microsoft.AspNetCore.Authorization
+@using TunnelManager.Web.Components.Shared
+@attribute [AllowAnonymous]
+
+<PageTitle>Login - Tunnel Manager</PageTitle>
+
+<LoginForm ReturnUrl="@ReturnUrl" Error="@Error" />
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+    
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+}

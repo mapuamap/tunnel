@@ -1,0 +1,133 @@
+@using TunnelManager.Web.Models
+@using TunnelManager.Web.Components.Shared
+@inject NginxAuthService NginxAuthService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">Manage Basic Auth for @Domain</MudText>
+
+        @if (_hasAuth)
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-4">This forward is protected with Basic Auth</MudAlert>
+            <MudText Typo="Typo.body2" Class="mb-2">Users:</MudText>
+            <MudList>
+                @foreach (var user in _users)
+                {
+                    <MudListItem>@user</MudListItem>
+                }
+            </MudList>
+            <MudDivider Class="my-4" />
+        }
+
+        <MudTextField @bind-Value="_username" Label="Username" Variant="Variant.Outlined" Class="mb-2" />
+        <MudTextField @bind-Value="_password" Label="Password" Variant="Variant.Outlined" InputType="InputType.Password" Class="mb-2" />
+        <MudTextField @bind-Value="_realm" Label="Realm" Variant="Variant.Outlined" HelperText="Default: Restricted Access" />
+
+        <MudButtonGroup Class="mt-4">
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="AddOrUpdateAuth">@(_hasAuth ? "Update Password" : "Add Auth")</MudButton>
+            @if (_hasAuth)
+            {
+                <MudButton Color="Color.Error" Variant="Variant.Outlined" OnClick="RemoveAuth">Remove Auth</MudButton>
+            }
+        </MudButtonGroup>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string Domain { get; set; } = string.Empty;
+
+    private bool _hasAuth = false;
+    private List<string> _users = new();
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _realm = "Restricted Access";
+
+    protected override void OnInitialized()
+    {
+        LoadAuthStatus();
+    }
+
+    private void LoadAuthStatus()
+    {
+        try
+        {
+            _hasAuth = NginxAuthService.HasAuth(Domain);
+            if (_hasAuth)
+            {
+                _users = NginxAuthService.GetAuthUsers(Domain);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading auth status: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task AddOrUpdateAuth()
+    {
+        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
+        {
+            Snackbar.Add("Username and password are required", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            if (_hasAuth)
+            {
+                NginxAuthService.UpdateAuth(Domain, _username, _password);
+                Snackbar.Add("Password updated", Severity.Success);
+            }
+            else
+            {
+                NginxAuthService.AddAuth(Domain, _username, _password, _realm);
+                Snackbar.Add("Auth added", Severity.Success);
+            }
+            LoadAuthStatus();
+            _username = string.Empty;
+            _password = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RemoveAuth()
+    {
+        var parameters = new DialogParameters
+        {
+            ["ContentText"] = $"Are you sure you want to remove Basic Auth from {Domain}?",
+            ["ButtonText"] = "Remove",
+            ["Color"] = Color.Error
+        };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Remove", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            try
+            {
+                NginxAuthService.RemoveAuth(Domain);
+                Snackbar.Add("Auth removed", Severity.Success);
+                LoadAuthStatus();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Close();
+    }
+}

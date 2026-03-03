@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  tunnelmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tunnelmanager
+    restart: unless-stopped
+    ports:
+      - "5101:5101"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://0.0.0.0:5101
+    volumes:
+      - ./appsettings.json:/app/appsettings.json:ro
+      - tunnelmanager_db:/app/data
+      - tunnelmanager_keys:/app/data/keys
+    networks:
+      - tunnelmanager_net
+
+volumes:
+  tunnelmanager_db:
+  tunnelmanager_keys:
+
+networks:
+  tunnelmanager_net:
+    driver: bridge

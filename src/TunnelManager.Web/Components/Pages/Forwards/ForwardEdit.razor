@@ -1,0 +1,83 @@
+@using TunnelManager.Web.Models
+@inject NginxService NginxService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="_forward.Domain" Label="Domain" Required="true" Variant="Variant.Outlined" />
+        <MudTextField @bind-Value="_forward.Target" Label="Target (IP:PORT)" Required="true" Variant="Variant.Outlined" HelperText="Example: 192.168.66.142:5000" />
+        <MudCheckBox T="bool" @bind-Value="_forward.HasWebSocket" Label="Enable WebSocket" />
+        <MudCheckBox T="bool" @bind-Value="_getSsl" Label="Request SSL Certificate" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public ForwardConfig Forward { get; set; } = new();
+
+    private ForwardConfig _forward = new();
+    private bool _getSsl = false;
+    private bool _isEdit = false;
+
+    protected override void OnInitialized()
+    {
+        if (Forward != null)
+        {
+            _forward = new ForwardConfig
+            {
+                Domain = Forward.Domain,
+                Target = Forward.Target,
+                HasWebSocket = Forward.HasWebSocket,
+                HasSsl = Forward.HasSsl,
+                IsEnabled = Forward.IsEnabled,
+                HasAuth = Forward.HasAuth
+            };
+        }
+        _isEdit = !string.IsNullOrEmpty(_forward.Domain);
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
+    private async Task Save()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_forward.Domain) || string.IsNullOrWhiteSpace(_forward.Target))
+            {
+                Snackbar.Add("Domain and Target are required", Severity.Warning);
+                return;
+            }
+
+            if (!System.Text.RegularExpressions.Regex.IsMatch(_forward.Target, @"^\d+\.\d+\.\d+\.\d+:\d+$"))
+            {
+                Snackbar.Add("Target must be in format IP:PORT", Severity.Warning);
+                return;
+            }
+
+            if (_isEdit)
+            {
+                NginxService.UpdateForward(_forward.Domain, _forward);
+                Snackbar.Add($"Forward {_forward.Domain} updated", Severity.Success);
+            }
+            else
+            {
+                NginxService.CreateForward(_forward, _getSsl);
+                Snackbar.Add($"Forward {_forward.Domain} created", Severity.Success);
+            }
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+}
