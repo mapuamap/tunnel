@@ -163,6 +163,9 @@ public class SshTunnelService
             // Ensure stream.d directory exists
             _sshService.CreateDirectory(StreamDir);
 
+            // Ensure nginx stream module is configured BEFORE writing config
+            EnsureStreamModuleConfigured();
+
             var configPath = $"{StreamDir}/ssh-{config.Name}.conf";
 
             var nginxConfig = $@"server {{
@@ -174,14 +177,30 @@ public class SshTunnelService
 
             _sshService.WriteFile(configPath, nginxConfig);
 
-            // Open UFW port
-            _sshService.ExecuteCommand($"ufw allow {config.ExternalPort}/tcp");
-
-            // Ensure nginx stream module is configured (one-time setup)
-            EnsureStreamModuleConfigured();
+            // Open firewall port (try iptables, ignore errors if firewall not available)
+            try
+            {
+                _sshService.ExecuteCommand($"iptables -I INPUT -p tcp --dport {config.ExternalPort} -j ACCEPT");
+            }
+            catch (Exception fwEx)
+            {
+                _loggerMM?.Warning("SshTunnelService", "CreateTunnel", $"Could not open firewall port {config.ExternalPort}: {fwEx.Message}",
+                    @params: new { name = config.Name, externalPort = config.ExternalPort },
+                    tags: new[] { "tunnel", "create", "firewall", "warning" });
+            }
 
             // Test and reload
-            TestAndReloadNginx();
+            try
+            {
+                TestAndReloadNginx();
+            }
+            catch
+            {
+                // Rollback: remove the broken config
+                _sshService.DeleteFile(configPath);
+                throw;
+            }
+
             InvalidateCache();
             
             _loggerMM?.Info("SshTunnelService", "CreateTunnel", $"SSH tunnel created successfully: {config.Name}",
@@ -224,14 +243,22 @@ public class SshTunnelService
                 throw new Exception($"Failed to read existing tunnel config");
             }
 
-            // If port changed, update UFW
+            // If port changed, update firewall
             if (existingConfig.ExternalPort != config.ExternalPort)
             {
-                _loggerMM?.Info("SshTunnelService", "UpdateTunnel", $"Port changed for tunnel {name}, updating UFW rules",
+                _loggerMM?.Info("SshTunnelService", "UpdateTunnel", $"Port changed for tunnel {name}, updating firewall rules",
                     @params: new { name, oldPort = existingConfig.ExternalPort, newPort = config.ExternalPort },
-                    tags: new[] { "tunnel", "update", "ufw" });
-                _sshService.ExecuteCommand($"ufw delete allow {existingConfig.ExternalPort}/tcp");
-                _sshService.ExecuteCommand($"ufw allow {config.ExternalPort}/tcp");
+                    tags: new[] { "tunnel", "update", "firewall" });
+                try
+                {
+                    _sshService.ExecuteCommand($"iptables -D INPUT -p tcp --dport {existingConfig.ExternalPort} -j ACCEPT 2>/dev/null; iptables -I INPUT -p tcp --dport {config.ExternalPort} -j ACCEPT");
+                }
+                catch (Exception fwEx)
+                {
+                    _loggerMM?.Warning("SshTunnelService", "UpdateTunnel", $"Could not update firewall rules: {fwEx.Message}",
+                        @params: new { name, oldPort = existingConfig.ExternalPort, newPort = config.ExternalPort },
+                        tags: new[] { "tunnel", "update", "firewall", "warning" });
+                }
             }
 
             var nginxConfig = $@"server {{
@@ -279,11 +306,20 @@ public class SshTunnelService
             var config = GetTunnelConfig(name);
             if (config != null)
             {
-                // Close UFW port
-                _loggerMM?.Debug("SshTunnelService", "DeleteTunnel", $"Removing UFW rule for port {config.ExternalPort}",
+                // Close firewall port
+                _loggerMM?.Debug("SshTunnelService", "DeleteTunnel", $"Removing firewall rule for port {config.ExternalPort}",
                     @params: new { name, externalPort = config.ExternalPort },
-                    tags: new[] { "tunnel", "delete", "ufw" });
-                _sshService.ExecuteCommand($"ufw delete allow {config.ExternalPort}/tcp");
+                    tags: new[] { "tunnel", "delete", "firewall" });
+                try
+                {
+                    _sshService.ExecuteCommand($"iptables -D INPUT -p tcp --dport {config.ExternalPort} -j ACCEPT");
+                }
+                catch (Exception fwEx)
+                {
+                    _loggerMM?.Warning("SshTunnelService", "DeleteTunnel", $"Could not remove firewall rule for port {config.ExternalPort}: {fwEx.Message}",
+                        @params: new { name, externalPort = config.ExternalPort },
+                        tags: new[] { "tunnel", "delete", "firewall", "warning" });
+                }
             }
 
             _sshService.DeleteFile(configPath);
@@ -311,43 +347,42 @@ public class SshTunnelService
         
         try
         {
-            // Check if stream block exists in nginx.conf
             var nginxConfPath = "/etc/nginx/nginx.conf";
             var nginxConf = _sshService.ReadFile(nginxConfPath);
 
-            if (!nginxConf.Contains("stream {"))
-            {
-                _loggerMM?.Info("SshTunnelService", "EnsureStreamModuleConfigured", "Configuring nginx stream module",
-                    tags: new[] { "tunnel", "nginx", "stream" });
-                
-                // Add stream module load and stream block
-                var streamModuleLoad = "load_module /usr/lib/nginx/modules/ngx_stream_module.so;";
-                var streamBlock = @"
-stream {
-    include /etc/nginx/stream.d/*.conf;
-}";
-
-                // Insert after http block
-                if (nginxConf.Contains("http {"))
-                {
-                    nginxConf = nginxConf.Replace("http {", $"{streamModuleLoad}\n\nhttp {{");
-                    nginxConf += streamBlock;
-                }
-                else
-                {
-                    nginxConf = streamModuleLoad + "\n" + nginxConf + streamBlock;
-                }
-
-                _sshService.WriteFile(nginxConfPath, nginxConf);
-                
-                _loggerMM?.Info("SshTunnelService", "EnsureStreamModuleConfigured", "Nginx stream module configured successfully",
-                    tags: new[] { "tunnel", "nginx", "stream" });
-            }
-            else
+            // Check if stream block with include already exists
+            if (Regex.IsMatch(nginxConf, @"stream\s*\{[^}]*include\s+/etc/nginx/stream\.d/"))
             {
                 _loggerMM?.Debug("SshTunnelService", "EnsureStreamModuleConfigured", "Nginx stream module already configured",
                     tags: new[] { "tunnel", "nginx", "stream" });
+                return;
             }
+
+            _loggerMM?.Info("SshTunnelService", "EnsureStreamModuleConfigured", "Configuring nginx stream module",
+                tags: new[] { "tunnel", "nginx", "stream" });
+
+            // Remove any bare include of stream.d at top level (broken config)
+            nginxConf = Regex.Replace(nginxConf, @"\n?include\s+/etc/nginx/stream\.d/\*\.conf;\n?", "\n");
+
+            // Remove any existing stream block (might be malformed)
+            // Only if it doesn't contain our include
+            if (nginxConf.Contains("stream {") && !Regex.IsMatch(nginxConf, @"stream\s*\{[^}]*include\s+/etc/nginx/stream\.d/"))
+            {
+                nginxConf = Regex.Replace(nginxConf, @"stream\s*\{[^}]*\}\s*", "");
+            }
+
+            // Add proper stream block at the end
+            var streamBlock = @"
+stream {
+    include /etc/nginx/stream.d/*.conf;
+}
+";
+            nginxConf = nginxConf.TrimEnd() + "\n" + streamBlock;
+
+            _sshService.WriteFile(nginxConfPath, nginxConf);
+            
+            _loggerMM?.Info("SshTunnelService", "EnsureStreamModuleConfigured", "Nginx stream module configured successfully",
+                tags: new[] { "tunnel", "nginx", "stream" });
         }
         catch (Exception ex)
         {
