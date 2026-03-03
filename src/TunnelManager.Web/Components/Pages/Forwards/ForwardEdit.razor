@@ -111,13 +111,26 @@
             {
                 NginxService.UpdateForward(_domain, config);
                 
-                // Request new SSL certificate if toggled on
+                Snackbar.Add($"Forward {_domain} updated", Severity.Success);
+                
+                // Request new SSL certificate if toggled on (separate try/catch so edit isn't lost)
                 if (_getSsl && !_hadSsl)
                 {
-                    NginxService.RequestSsl(_domain);
+                    try
+                    {
+                        NginxService.RequestSsl(_domain);
+                        Snackbar.Add($"SSL certificate obtained for {_domain}", Severity.Success);
+                    }
+                    catch (Exception sslEx)
+                    {
+                        Snackbar.Add($"Forward saved but SSL failed: {sslEx.Message}", Severity.Warning);
+                        LoggerMM?.Warning("ForwardEdit", "Save", $"SSL request failed for {_domain}: {sslEx.Message}",
+                            user: user,
+                            exception: sslEx,
+                            @params: new { domain = _domain },
+                            tags: new[] { "forward", "ssl", "warning" });
+                    }
                 }
-                
-                Snackbar.Add($"Forward {_domain} updated", Severity.Success);
                 
                 LoggerMM?.UserAction("ForwardEdit", "Save", $"Forward updated: {_domain}",
                     user: user,
@@ -126,8 +139,28 @@
             }
             else
             {
-                NginxService.CreateForward(config, _getSsl);
+                // Create forward without SSL first
+                NginxService.CreateForward(config, false);
                 Snackbar.Add($"Forward {_domain} created", Severity.Success);
+                
+                // Request SSL separately so forward creation isn't rolled back on SSL failure
+                if (_getSsl)
+                {
+                    try
+                    {
+                        NginxService.RequestSsl(_domain);
+                        Snackbar.Add($"SSL certificate obtained for {_domain}", Severity.Success);
+                    }
+                    catch (Exception sslEx)
+                    {
+                        Snackbar.Add($"Forward created but SSL failed: {sslEx.Message}", Severity.Warning);
+                        LoggerMM?.Warning("ForwardEdit", "Save", $"SSL request failed for new forward {_domain}: {sslEx.Message}",
+                            user: user,
+                            exception: sslEx,
+                            @params: new { domain = _domain },
+                            tags: new[] { "forward", "ssl", "warning" });
+                    }
+                }
                 
                 LoggerMM?.UserAction("ForwardEdit", "Save", $"Forward created: {_domain}",
                     user: user,
