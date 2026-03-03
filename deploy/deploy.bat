@@ -92,7 +92,7 @@ if errorlevel 1 (
 echo.
 echo [4/4] Verifying deployment...
 timeout /t 8 /nobreak >nul
-ssh %VM_USER%@%VM_HOST% "docker ps --filter name=tunnelmanager --format '{{.Status}}'"
+ssh %VM_USER%@%VM_HOST% "docker ps --filter name=tunnelmanager --format {{.Status}}"
 
 :: ============================================
 :: DONE

@@ -40,6 +40,7 @@
                 IsEnabled = Forward.IsEnabled,
                 HasAuth = Forward.HasAuth
             };
+            _getSsl = Forward.HasSsl;
         }
         _isEdit = !string.IsNullOrEmpty(_forward.Domain);
     }
@@ -78,12 +79,21 @@
 
             if (_isEdit)
             {
+                var hadSsl = Forward.HasSsl;
+                _forward.HasSsl = _getSsl;
                 NginxService.UpdateForward(_forward.Domain, _forward);
+                
+                // Request new SSL certificate if toggled on
+                if (_getSsl && !hadSsl)
+                {
+                    NginxService.RequestSsl(_forward.Domain);
+                }
+                
                 Snackbar.Add($"Forward {_forward.Domain} updated", Severity.Success);
                 
                 LoggerMM?.UserAction("ForwardEdit", "Save", $"Forward updated: {_forward.Domain}",
                     user: user,
-                    @params: new { domain = _forward.Domain, target = _forward.Target, hasWebSocket = _forward.HasWebSocket },
+                    @params: new { domain = _forward.Domain, target = _forward.Target, hasWebSocket = _forward.HasWebSocket, hasSsl = _getSsl, sslChanged = hadSsl != _getSsl },
                     tags: new[] { "forward", "update", "user-action" });
             }
             else

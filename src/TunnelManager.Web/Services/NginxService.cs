@@ -242,9 +242,9 @@ public class NginxService
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection ""upgrade"";" : "";
 
-        // Preserve SSL config if exists
+        // Preserve SSL config only if the forward should keep SSL
         var sslConfig = "";
-        if (Regex.IsMatch(existingContent, @"listen\s+443"))
+        if (config.HasSsl && Regex.IsMatch(existingContent, @"listen\s+443"))
         {
             var sslMatch = Regex.Match(existingContent, @"(listen\s+443[^;]+;[\s\S]*?ssl_certificate[^;]+;[\s\S]*?ssl_certificate_key[^;]+;)");
             if (sslMatch.Success)
