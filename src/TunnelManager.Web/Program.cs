@@ -60,23 +60,18 @@ builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
     .SetApplicationName("TunnelManager");
 
-// Register Logger_MM.Agent as singleton (optional – if config section is missing, services get null)
-var loggerMmUrl = builder.Configuration["LoggerMM:Url"];
-var loggerMmApiKey = builder.Configuration["LoggerMM:ApiKey"];
-if (!string.IsNullOrEmpty(loggerMmUrl) && !string.IsNullOrEmpty(loggerMmApiKey))
+// Register Logger_MM.Agent as singleton
+builder.Services.AddSingleton<LoggerMMAgent>(sp =>
 {
-    builder.Services.AddSingleton<LoggerMMAgent>(sp =>
-    {
-        var config = sp.GetRequiredService<IConfiguration>();
-        return new LoggerMMAgent(
-            observerUrl: loggerMmUrl,
-            apiKey: loggerMmApiKey,
-            appName: config["LoggerMM:AppName"] ?? "TunnelManager",
-            appVersion: "1.0.0",
-            environment: builder.Environment.EnvironmentName
-        );
-    });
-}
+    var config = sp.GetRequiredService<IConfiguration>();
+    return new LoggerMMAgent(
+        observerUrl: config["LoggerMM:Url"] ?? throw new InvalidOperationException("LoggerMM:Url not configured"),
+        apiKey: config["LoggerMM:ApiKey"] ?? throw new InvalidOperationException("LoggerMM:ApiKey not configured"),
+        appName: config["LoggerMM:AppName"] ?? "TunnelManager",
+        appVersion: "1.0.0",
+        environment: builder.Environment.EnvironmentName
+    );
+});
 
 var app = builder.Build();
 
@@ -87,18 +82,15 @@ using (var scope = app.Services.CreateScope())
     dbContext.Database.EnsureCreated();
 }
 
-// Start Logger_MM.Agent (if configured)
-var loggerAgent = app.Services.GetService<LoggerMMAgent>();
-if (loggerAgent != null)
-{
-    await loggerAgent.StartAsync();
+// Start Logger_MM.Agent
+var loggerAgent = app.Services.GetRequiredService<LoggerMMAgent>();
+await loggerAgent.StartAsync();
 
-    // Stop Logger_MM.Agent on shutdown
-    app.Lifetime.ApplicationStopping.Register(() =>
-    {
-        loggerAgent.StopAsync().GetAwaiter().GetResult();
-    });
-}
+// Stop Logger_MM.Agent on shutdown
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    loggerAgent.StopAsync().GetAwaiter().GetResult();
+});
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
