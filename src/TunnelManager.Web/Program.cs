@@ -90,45 +90,50 @@ using (var scope = app.Services.CreateScope())
     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     dbContext.Database.EnsureCreated();
 
-    // Create tunnel_stats database if it doesn't exist
-    var statsConnectionString = app.Configuration.GetConnectionString("StatsConnection");
-    if (!string.IsNullOrEmpty(statsConnectionString))
-    {
-        try
-        {
-            // Parse connection string to get server info
-            var connBuilder = new Npgsql.NpgsqlConnectionStringBuilder(statsConnectionString);
-            var dbName = connBuilder.Database;
-            connBuilder.Database = "postgres"; // Connect to default database to create our database
-
-            using var tempConnection = new Npgsql.NpgsqlConnection(connBuilder.ConnectionString);
-            tempConnection.Open();
-
-            // Check if database exists
-            var checkDbCommand = tempConnection.CreateCommand();
-            checkDbCommand.CommandText = $"SELECT 1 FROM pg_database WHERE datname = '{dbName}'";
-            var exists = checkDbCommand.ExecuteScalar() != null;
-
-            if (!exists)
+            // Create tunnel_stats database if it doesn't exist
+            var statsConnectionString = app.Configuration.GetConnectionString("StatsConnection");
+            if (!string.IsNullOrEmpty(statsConnectionString))
             {
-                // Create database
-                var createDbCommand = tempConnection.CreateCommand();
-                createDbCommand.CommandText = $"CREATE DATABASE {dbName}";
-                createDbCommand.ExecuteNonQuery();
+                try
+                {
+                    // Parse connection string to get server info
+                    var connBuilder = new Npgsql.NpgsqlConnectionStringBuilder(statsConnectionString);
+                    var dbName = connBuilder.Database;
+                    connBuilder.Database = "postgres"; // Connect to default database to create our database
+
+                    using var tempConnection = new Npgsql.NpgsqlConnection(connBuilder.ConnectionString);
+                    tempConnection.Open();
+
+                    // Check if database exists
+                    var checkDbCommand = tempConnection.CreateCommand();
+                    checkDbCommand.CommandText = $"SELECT 1 FROM pg_database WHERE datname = '{dbName}'";
+                    var exists = checkDbCommand.ExecuteScalar() != null;
+
+                    if (!exists)
+                    {
+                        // Create database
+                        var createDbCommand = tempConnection.CreateCommand();
+                        createDbCommand.CommandText = $"CREATE DATABASE {dbName}";
+                        createDbCommand.ExecuteNonQuery();
+                    }
+
+                    tempConnection.Close();
+
+                    // Ensure StatsDbContext schema is created
+                    var statsDbContext = scope.ServiceProvider.GetRequiredService<StatsDbContext>();
+                    statsDbContext.Database.EnsureCreated();
+                }
+                catch (Exception ex)
+                {
+                    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+                    logger.LogWarning(ex, "Failed to setup PostgreSQL stats database. Stats collection will be disabled. Error: {Error}", ex.Message);
+                }
             }
-
-            tempConnection.Close();
-        }
-        catch (Exception ex)
-        {
-            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-            logger.LogWarning(ex, "Failed to create tunnel_stats database. It may already exist or connection failed.");
-        }
-    }
-
-    // Ensure StatsDbContext schema is created
-    var statsDbContext = scope.ServiceProvider.GetRequiredService<StatsDbContext>();
-    statsDbContext.Database.EnsureCreated();
+            else
+            {
+                var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+                logger.LogWarning("StatsConnection string is not configured. Stats collection will be disabled.");
+            }
 }
 
 // Start Logger_MM.Agent
