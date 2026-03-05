@@ -171,7 +171,7 @@ public class SshTunnelService
             var nginxConfig = $@"server {{
     listen {config.ExternalPort};
     proxy_pass {config.TargetIp}:{config.TargetPort};
-    proxy_timeout 600s;
+    proxy_timeout 12h;
     proxy_connect_timeout 10s;
 }}";
 
@@ -264,7 +264,7 @@ public class SshTunnelService
             var nginxConfig = $@"server {{
     listen {config.ExternalPort};
     proxy_pass {config.TargetIp}:{config.TargetPort};
-    proxy_timeout 600s;
+    proxy_timeout 12h;
     proxy_connect_timeout 10s;
 }}";
 

@@ -58,6 +58,10 @@ def generate_nginx_config(domain, target_ip, target_port, websocket=False):
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
         
+        # Prevent stale cache after redeploy
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-cache";
+        
         # Buffer settings
         proxy_buffering off;
         proxy_request_buffering off;

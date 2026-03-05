@@ -200,7 +200,11 @@ public class NginxService
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;{wsConfig}
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Prevent stale cache after redeploy
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control ""no-cache"";{wsConfig}
     }}
 }}";
 
@@ -250,7 +254,10 @@ public class NginxService
             "        proxy_set_header Host $host;",
             "        proxy_set_header X-Real-IP $remote_addr;",
             "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-            "        proxy_set_header X-Forwarded-Proto $scheme;"
+            "        proxy_set_header X-Forwarded-Proto $scheme;",
+            "        # Prevent stale cache after redeploy",
+            "        proxy_hide_header Cache-Control;",
+            "        add_header Cache-Control \"no-cache\";"
         };
 
         if (config.HasWebSocket)
@@ -305,7 +312,11 @@ public class NginxService
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;{wsConfig}{authConfig}
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Prevent stale cache after redeploy
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control ""no-cache"";{wsConfig}{authConfig}
     }}
 }}";
         }

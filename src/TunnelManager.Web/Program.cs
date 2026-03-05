@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
+using Npgsql;
 using TunnelManager.Web.Components;
 using TunnelManager.Web.Data;
 using TunnelManager.Web.Services;
@@ -24,6 +25,10 @@ builder.Services.AddMudServices(config =>
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+// Add StatsDbContext for PostgreSQL
+builder.Services.AddDbContext<StatsDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("StatsConnection")));
+
 // Add SSH Service as singleton (persistent connections, thread-safe)
 builder.Services.AddSingleton<SshService>();
 
@@ -32,6 +37,10 @@ builder.Services.AddSingleton<NginxService>();
 builder.Services.AddSingleton<NginxAuthService>();
 builder.Services.AddSingleton<SshTunnelService>();
 builder.Services.AddSingleton<WireGuardService>();
+
+// Add health check service
+builder.Services.AddSingleton<HealthCheckService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthCheckService>());
 
 // Add background service for stats collection
 builder.Services.AddHostedService<StatsCollectorService>();
@@ -75,11 +84,51 @@ builder.Services.AddSingleton<LoggerMMAgent>(sp =>
 
 var app = builder.Build();
 
-// Ensure database is created
+// Ensure databases are created
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     dbContext.Database.EnsureCreated();
+
+    // Create tunnel_stats database if it doesn't exist
+    var statsConnectionString = app.Configuration.GetConnectionString("StatsConnection");
+    if (!string.IsNullOrEmpty(statsConnectionString))
+    {
+        try
+        {
+            // Parse connection string to get server info
+            var connBuilder = new Npgsql.NpgsqlConnectionStringBuilder(statsConnectionString);
+            var dbName = connBuilder.Database;
+            connBuilder.Database = "postgres"; // Connect to default database to create our database
+
+            using var tempConnection = new Npgsql.NpgsqlConnection(connBuilder.ConnectionString);
+            tempConnection.Open();
+
+            // Check if database exists
+            var checkDbCommand = tempConnection.CreateCommand();
+            checkDbCommand.CommandText = $"SELECT 1 FROM pg_database WHERE datname = '{dbName}'";
+            var exists = checkDbCommand.ExecuteScalar() != null;
+
+            if (!exists)
+            {
+                // Create database
+                var createDbCommand = tempConnection.CreateCommand();
+                createDbCommand.CommandText = $"CREATE DATABASE {dbName}";
+                createDbCommand.ExecuteNonQuery();
+            }
+
+            tempConnection.Close();
+        }
+        catch (Exception ex)
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning(ex, "Failed to create tunnel_stats database. It may already exist or connection failed.");
+        }
+    }
+
+    // Ensure StatsDbContext schema is created
+    var statsDbContext = scope.ServiceProvider.GetRequiredService<StatsDbContext>();
+    statsDbContext.Database.EnsureCreated();
 }
 
 // Start Logger_MM.Agent
