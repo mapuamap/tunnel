@@ -194,6 +194,7 @@ public class NginxService
         var nginxConfig = $@"server {{
     listen 80;
     server_name {config.Domain};
+    client_max_body_size 50m;
     
     location / {{
         proxy_pass http://{config.Target};
@@ -286,6 +287,13 @@ public class NginxService
                 $"$1\n{locationContent}\n    $2",
                 RegexOptions.Singleline);
 
+            if (!nginxConfig.Contains("client_max_body_size"))
+            {
+                nginxConfig = Regex.Replace(nginxConfig,
+                    @"(server_name\s+[^;]+;)",
+                    "$1\n    client_max_body_size 50m;");
+            }
+
             _loggerMM?.Debug("NginxService", "UpdateForward", $"Preserved certbot SSL config for {domain}",
                 tags: new[] { "nginx", "forward", "update", "ssl-preserved" });
         }
@@ -306,6 +314,7 @@ public class NginxService
             nginxConfig = $@"server {{
     listen 80;
     server_name {domain};
+    client_max_body_size 50m;
     
     location / {{
         proxy_pass http://{config.Target};

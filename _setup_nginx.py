@@ -35,6 +35,7 @@ def generate_nginx_config(domain, target_ip, target_port, websocket=False):
     return f"""server {{
     listen 80;
     server_name {domain};
+    client_max_body_size 50m;
     
     location / {{
         proxy_pass http://{target_ip}:{target_port};

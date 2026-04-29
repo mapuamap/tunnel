@@ -27,6 +27,7 @@ def fix_all_configs(host, user, password):
         # Fix apigencomf - recreate it properly
         config = """server {
     server_name apigencomf.denys.fast;
+    client_max_body_size 50m;
     
     location / {
         proxy_pass http://192.168.66.142:8188;

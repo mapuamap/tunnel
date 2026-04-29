@@ -52,6 +52,10 @@ def fix_nginx_config(host, user, password):
             is_websocket = 'Upgrade' in location_block or 'upgrade' in location_block
             
             # Build new location block with cookie fixes
+            # Ensure client_max_body_size is set at server level
+            if 'client_max_body_size' not in content:
+                content = content.replace('location / {', 'client_max_body_size 50m;\n\n    location / {', 1)
+
             new_location = """location / {
         proxy_pass http://"""
             
