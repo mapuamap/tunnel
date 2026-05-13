@@ -8,4 +8,5 @@ public class ForwardConfig
     public bool HasAuth { get; set; }
     public bool HasWebSocket { get; set; }
     public bool IsEnabled { get; set; }
+    public string Folder { get; set; } = string.Empty;
 }

@@ -11,6 +11,7 @@
 @inject NginxService NginxService
 @inject NginxAuthService NginxAuthService
 @inject HealthCheckService HealthCheckService
+@inject FolderService FolderService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject ILogger<ForwardList> Logger
@@ -34,6 +35,7 @@ else
     <MudTable Items="@_forwards" Hover="true" Striped="true" Dense="true">
         <HeaderContent>
             <MudTh>Domain</MudTh>
+            <MudTh>Folder</MudTh>
             <MudTh>Target</MudTh>
             <MudTh>SSL</MudTh>
             <MudTh>Auth</MudTh>
@@ -45,6 +47,22 @@ else
         </HeaderContent>
         <RowTemplate>
             <MudTd DataLabel="Domain">@context.Domain</MudTd>
+            <MudTd DataLabel="Folder">
+                <MudSelect T="string"
+                           Value="@context.Folder"
+                           ValueChanged="@(v => OnFolderChanged(context, v))"
+                           Dense="true"
+                           Margin="Margin.Dense"
+                           Variant="Variant.Outlined"
+                           Clearable="true"
+                           Style="min-width: 140px;">
+                    <MudSelectItem T="string" Value="@string.Empty">(none)</MudSelectItem>
+                    @foreach (var folder in _folders)
+                    {
+                        <MudSelectItem T="string" Value="@folder">@folder</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudTd>
             <MudTd DataLabel="Target">@context.Target</MudTd>
             <MudTd DataLabel="SSL">
                 @if (context.HasSsl)
@@ -133,6 +151,7 @@ else
     private bool _loading = true;
     private List<ForwardConfig> _forwards = new();
     private Dictionary<string, ForwardHealthStatus> _healthStatuses = new();
+    private List<string> _folders = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -167,6 +186,15 @@ else
         {
             _loading = true;
             _forwards = NginxService.GetAllForwards();
+            _folders = FolderService.GetFolders();
+            var domainFolders = FolderService.GetDomainFolders();
+            foreach (var fwd in _forwards)
+            {
+                if (domainFolders.TryGetValue(fwd.Domain, out var folder))
+                {
+                    fwd.Folder = folder;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -175,6 +203,21 @@ else
         finally
         {
             _loading = false;
+        }
+    }
+
+    private void OnFolderChanged(ForwardConfig forward, string? newFolder)
+    {
+        try
+        {
+            var value = newFolder ?? string.Empty;
+            forward.Folder = value;
+            FolderService.SetDomainFolder(forward.Domain, value);
+            Snackbar.Add($"Folder saved for {forward.Domain}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving folder: {ex.Message}", Severity.Error);
         }
     }
 

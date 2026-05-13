@@ -22,9 +22,10 @@ public class StatsCollectorService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _logger.LogInformation("Stats collector service started");
         _loggerMM?.Info("StatsCollector", "ExecuteAsync", "Stats collector service started",
             tags: new[] { "stats", "service" });
-        
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -58,28 +59,36 @@ public class StatsCollectorService : BackgroundService
         try
         {
             var logPath = "/var/log/nginx/access.log";
-            var sinceTime = _lastReadTime.ToString("dd/MMM/yyyy:HH:mm:ss");
 
-            // Read new log entries since last read
-            var command = $"awk '$4 > \"[{sinceTime}\" {{print}}' {logPath} 2>/dev/null || tail -n 1000 {logPath}";
+            // Pull a window of recent lines and filter by Timestamp in .NET — avoids
+            // brittle string-compare awk filters that break across month boundaries.
+            var command = $"tail -n 5000 {logPath}";
             var logContent = sshService.ExecuteCommand(command);
 
             if (string.IsNullOrWhiteSpace(logContent))
             {
-                _loggerMM?.Debug("StatsCollector", "CollectStats", "No new log entries found",
-                    tags: new[] { "stats", "collection" });
+                _logger.LogInformation("Stats: no log content returned from VPS");
                 return;
             }
 
-            var requestLogs = ParseLogs(logContent);
+            var lineCount = logContent.Count(c => c == '\n') + 1;
+            var allLogs = ParseLogs(logContent);
+            var requestLogs = allLogs.Where(r => r.Timestamp > _lastReadTime).ToList();
+
+            _logger.LogInformation(
+                "Stats: tail returned ~{Lines} lines, parsed {Parsed}, new since {Since:o}: {New}",
+                lineCount, allLogs.Count, _lastReadTime, requestLogs.Count);
+
             _lastReadTime = DateTime.UtcNow;
-            
-            _loggerMM?.Debug("StatsCollector", "CollectStats", $"Parsed {requestLogs.Count} log entries",
-                @params: new { logEntryCount = requestLogs.Count },
-                tags: new[] { "stats", "collection" });
 
             if (requestLogs.Count == 0)
             {
+                if (allLogs.Count == 0)
+                {
+                    _logger.LogWarning(
+                        "Stats: 0 of {Lines} lines parsed — check nginx log_format and parser regex",
+                        lineCount);
+                }
                 return;
             }
 
@@ -239,9 +248,11 @@ public class StatsCollectorService : BackgroundService
         var logs = new List<TrafficRequestLog>();
         var lines = logContent.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
-        // Nginx log format: $remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" "$server_name"
-        // Extended format may include: $request_time, $upstream_response_time
-        var pattern = @"^(\S+)\s+-\s+(\S+)\s+\[([^\]]+)\]\s+""([^""]+)""\s+(\d+)\s+(\d+)\s+""([^""]*)""\s+""([^""]*)""\s+""([^""]+)""(?:\s+([\d.]+))?";
+        // Supports two formats:
+        //   combined  (8 quoted-ish fields):  ... "$request" $status $bytes "$referer" "$ua"
+        //   tunnelmgr (10 fields):            ... "$request" $status $bytes "$referer" "$ua" "$host" $request_time
+        // Host and request_time are optional so old combined-format lines still parse.
+        var pattern = @"^(\S+)\s+-\s+(\S+)\s+\[([^\]]+)\]\s+""([^""]+)""\s+(\d+)\s+(\d+)\s+""([^""]*)""\s+""([^""]*)""(?:\s+""([^""]*)"")?(?:\s+([\d.]+))?";
 
         foreach (var line in lines)
         {
@@ -258,7 +269,9 @@ public class StatsCollectorService : BackgroundService
                 var bytesSent = long.Parse(match.Groups[6].Value);
                 var referer = match.Groups[7].Value;
                 var userAgent = match.Groups[8].Value;
-                var domain = match.Groups[9].Value;
+                var domain = match.Groups[9].Success && !string.IsNullOrEmpty(match.Groups[9].Value)
+                    ? match.Groups[9].Value
+                    : "unknown";
                 var responseTimeStr = match.Groups[10].Success ? match.Groups[10].Value : null;
 
                 if (!DateTime.TryParseExact(timeStr, "dd/MMM/yyyy:HH:mm:ss zzz", null, 

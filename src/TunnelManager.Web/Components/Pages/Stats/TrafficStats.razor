@@ -11,292 +11,401 @@
 
 <PageTitle>Traffic Stats - Tunnel Manager</PageTitle>
 
-<MudText Typo="Typo.h4" Class="mb-4">Traffic Statistics</MudText>
+@* ─── Header ──────────────────────────────────────────────── *@
+<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+    <div>
+        <MudText Typo="Typo.h4">Traffic statistics</MudText>
+        <MudText Typo="Typo.caption" Color="Color.Default">
+            @if (_lastLoadedAt.HasValue)
+            {
+                <span>Updated @_lastLoadedAt.Value.ToLocalTime().ToString("HH:mm:ss") · @_tableData.Count rows · @TimeRangeLabel(_timeRangeHours)</span>
+            }
+            else
+            {
+                <span>Loading…</span>
+            }
+        </MudText>
+    </div>
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+        <MudSwitch @bind-Checked="_autoRefresh" Label="Auto-refresh" Color="Color.Primary" />
+        <MudTooltip Text="Reload now">
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="LoadData" Color="Color.Default" />
+        </MudTooltip>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="ExportToCsv">CSV</MudButton>
+    </MudStack>
+</MudStack>
 
-@* Filters *@
-<MudCard Elevation="2" Class="mb-4">
-    <MudCardContent>
-        <MudGrid>
-            <MudItem xs="12" md="4">
-                <MudText Typo="Typo.h6" Class="mb-2">Domain</MudText>
-                <MudStack Row="true" Spacing="2" Wrap="true">
-                    <MudButton Variant="@(_selectedDomains.Count == 0 ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Primary" Size="Size.Small"
-                              OnClick="() => SelectDomain(null)">
-                        All Domains
-                    </MudButton>
-                    @foreach (var domain in _allDomains.Take(10))
-                    {
-                        <MudButton Variant="@(_selectedDomains.Contains(domain) ? Variant.Filled : Variant.Text)" 
-                                  Color="Color.Primary" Size="Size.Small"
-                                  OnClick="() => SelectDomain(domain)">
-                            @domain
-                        </MudButton>
-                    }
-                </MudStack>
-            </MudItem>
-            <MudItem xs="12" md="4">
-                <MudText Typo="Typo.h6" Class="mb-2">Time Range</MudText>
-                <MudStack Row="true" Spacing="2">
-                    <MudButton Variant="@(_timeRangeHours == 1 ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Secondary" Size="Size.Small"
-                              OnClick="() => SelectTimeRange(1)">1h</MudButton>
-                    <MudButton Variant="@(_timeRangeHours == 12 ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Secondary" Size="Size.Small"
-                              OnClick="() => SelectTimeRange(12)">12h</MudButton>
-                    <MudButton Variant="@(_timeRangeHours == 24 ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Secondary" Size="Size.Small"
-                              OnClick="() => SelectTimeRange(24)">24h</MudButton>
-                    <MudButton Variant="@(_timeRangeHours == 168 ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Secondary" Size="Size.Small"
-                              OnClick="() => SelectTimeRange(168)">7d</MudButton>
-                    <MudButton Variant="@(_timeRangeHours == 720 ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Secondary" Size="Size.Small"
-                              OnClick="() => SelectTimeRange(720)">30d</MudButton>
-                    <MudButton Variant="@(_timeRangeHours == null ? Variant.Filled : Variant.Text)" 
-                              Color="Color.Secondary" Size="Size.Small"
-                              OnClick="() => SelectTimeRange(null)">All</MudButton>
-                </MudStack>
-            </MudItem>
-            <MudItem xs="12" md="4">
-                <MudText Typo="Typo.h6" Class="mb-2">Options</MudText>
-                <MudStack Row="true" Spacing="2">
-                    <MudSwitch @bind-Checked="_autoRefresh" Label="Auto-refresh" Color="Color.Primary" />
-                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
-                              OnClick="ExportToCsv" StartIcon="@Icons.Material.Filled.Download">
-                        Export CSV
-                    </MudButton>
-                </MudStack>
-            </MudItem>
-        </MudGrid>
-    </MudCardContent>
-</MudCard>
+@* ─── Filter bar ──────────────────────────────────────────── *@
+<MudPaper Outlined="true" Class="pa-3 mb-4">
+    <MudGrid AlignItems="AlignItems.Center" Spacing="3">
+        <MudItem xs="12" md="5">
+            <MudSelect T="string" Label="Domains"
+                       MultiSelection="true"
+                       SelectAll="true"
+                       SelectAllText="All domains"
+                       SelectedValues="_selectedDomainsValues"
+                       SelectedValuesChanged="OnDomainsChanged"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Dense="true"
+                       AnchorOrigin="Origin.BottomCenter"
+                       MultiSelectionTextFunc="@(values => values.Count == 0 ? "All domains" : $"{values.Count} of {_allDomains.Count}")">
+                @foreach (var domain in _allDomains)
+                {
+                    <MudSelectItem T="string" Value="@domain">@domain</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="7">
+            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Justify="Justify.FlexEnd">
+                <MudText Typo="Typo.caption" Color="Color.Default" Class="mr-1">Range:</MudText>
+                @foreach (var (hours, label) in _timeRanges)
+                {
+                    var selected = _timeRangeHours == hours;
+                    <MudButton Variant="@(selected ? Variant.Filled : Variant.Outlined)"
+                               Color="@(selected ? Color.Primary : Color.Default)"
+                               Size="Size.Small"
+                               DisableElevation="true"
+                               OnClick="() => SelectTimeRange(hours)">@label</MudButton>
+                }
+            </MudStack>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
 
-@* KPI Cards *@
+@if (!string.IsNullOrEmpty(_errorMessage))
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="() => _errorMessage = null">
+        @_errorMessage
+    </MudAlert>
+}
+
 @if (_loading)
 {
     <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-4" />
 }
-else
+else if (_kpiData.TotalRequests == 0 && string.IsNullOrEmpty(_errorMessage))
 {
-    <MudGrid Class="mb-4">
-        <MudItem xs="12" sm="6" md="2">
-            <MudCard Elevation="3">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-1">Total Requests</MudText>
-                    <MudText Typo="Typo.h4" Class="text-primary">@_kpiData.TotalRequests.ToString("N0")</MudText>
-                </MudCardContent>
-            </MudCard>
+    <MudAlert Severity="Severity.Info" Class="mb-4">
+        No traffic data for the selected range. Collector polls nginx every 5 minutes — check container logs if this persists.
+    </MudAlert>
+}
+
+@if (!_loading && _kpiData.TotalRequests > 0)
+{
+    @* ─── KPI cards ───────────────────────────────────────── *@
+    <MudGrid Class="mb-4" Spacing="3">
+        @KpiCard("Total requests", _kpiData.TotalRequests.ToString("N0"), Icons.Material.Filled.Send, Color.Primary)
+        @KpiCard("Bandwidth", FormatBytes(_kpiData.TotalBandwidth), Icons.Material.Filled.CloudDownload, Color.Info)
+        @KpiCard("Error rate", $"{_kpiData.ErrorRate:F1}%", Icons.Material.Filled.WarningAmber, _kpiData.ErrorRate > 5 ? Color.Error : Color.Success)
+        @KpiCard("Unique IPs", _kpiData.UniqueIps.ToString("N0"), Icons.Material.Filled.Public, Color.Secondary)
+        @KpiCard("Active domains", _kpiData.ActiveDomains.ToString("N0"), Icons.Material.Filled.Dns, Color.Tertiary)
+    </MudGrid>
+
+    @* ─── Charts row ──────────────────────────────────────── *@
+    <MudGrid Class="mb-4" Spacing="3">
+        <MudItem xs="12" lg="8">
+            <MudPaper Outlined="true" Class="pa-4" Style="height:100%;">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-2">
+                    <MudText Typo="Typo.h6">Activity over time</MudText>
+                    <MudButtonGroup OverrideStyles="false" Variant="Variant.Outlined" Size="Size.Small">
+                        <MudButton Color="@(_chartMetric == ChartMetric.Requests ? Color.Primary : Color.Default)"
+                                   Variant="@(_chartMetric == ChartMetric.Requests ? Variant.Filled : Variant.Outlined)"
+                                   DisableElevation="true"
+                                   OnClick="() => SetMetric(ChartMetric.Requests)">Requests</MudButton>
+                        <MudButton Color="@(_chartMetric == ChartMetric.Bandwidth ? Color.Primary : Color.Default)"
+                                   Variant="@(_chartMetric == ChartMetric.Bandwidth ? Variant.Filled : Variant.Outlined)"
+                                   DisableElevation="true"
+                                   OnClick="() => SetMetric(ChartMetric.Bandwidth)">Bandwidth</MudButton>
+                    </MudButtonGroup>
+                </MudStack>
+                @if (_lineSeries.Count > 0 && _lineSeries[0].Data.Length >= 2)
+                {
+                    <MudChart ChartType="ChartType.Line"
+                              ChartSeries="@_lineSeries"
+                              XAxisLabels="@_lineLabels"
+                              ChartOptions="@_lineOptions"
+                              Width="100%" Height="320px" />
+                }
+                else
+                {
+                    <div style="height:320px;display:flex;align-items:center;justify-content:center;">
+                        <MudText Typo="Typo.body2" Color="Color.Default">Not enough data points to plot.</MudText>
+                    </div>
+                }
+            </MudPaper>
         </MudItem>
-        <MudItem xs="12" sm="6" md="2">
-            <MudCard Elevation="3">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-1">Total Bandwidth</MudText>
-                    <MudText Typo="Typo.h4" Class="text-primary">@FormatBytes(_kpiData.TotalBandwidth)</MudText>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-        <MudItem xs="12" sm="6" md="2">
-            <MudCard Elevation="3">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-1">Error Rate</MudText>
-                    <MudText Typo="Typo.h4" Class="@(_kpiData.ErrorRate > 5 ? "text-error" : "text-primary")">
-                        @_kpiData.ErrorRate.ToString("F1")%
-                    </MudText>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-        <MudItem xs="12" sm="6" md="2">
-            <MudCard Elevation="3">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-1">Unique IPs</MudText>
-                    <MudText Typo="Typo.h4" Class="text-primary">@_kpiData.UniqueIps.ToString("N0")</MudText>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-        <MudItem xs="12" sm="6" md="2">
-            <MudCard Elevation="3">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-1">Active Domains</MudText>
-                    <MudText Typo="Typo.h4" Class="text-primary">@_kpiData.ActiveDomains</MudText>
-                </MudCardContent>
-            </MudCard>
+        <MudItem xs="12" lg="4">
+            <MudPaper Outlined="true" Class="pa-4" Style="height:100%;">
+                <MudText Typo="Typo.h6" Class="mb-2">Status codes</MudText>
+                @if (_statusData.Total > 0)
+                {
+                    <div style="display:flex;justify-content:center;">
+                        <MudChart ChartType="ChartType.Donut"
+                                  InputData="@_donutData"
+                                  InputLabels="@_donutLabels"
+                                  Width="220px" Height="220px" />
+                    </div>
+                    <MudStack Spacing="1" Class="mt-3">
+                        @StatusRow("2xx", _statusData.Status2xx, Color.Success)
+                        @StatusRow("3xx", _statusData.Status3xx, Color.Info)
+                        @StatusRow("4xx", _statusData.Status4xx, Color.Warning)
+                        @StatusRow("5xx", _statusData.Status5xx, Color.Error)
+                    </MudStack>
+                }
+                else
+                {
+                    <div style="height:220px;display:flex;align-items:center;justify-content:center;">
+                        <MudText Typo="Typo.body2" Color="Color.Default">No status data.</MudText>
+                    </div>
+                }
+            </MudPaper>
         </MudItem>
     </MudGrid>
 
-    @* Statistics Visualizations *@
-    <MudGrid Class="mb-4">
-        <MudItem xs="12" md="6">
-            <MudCard Elevation="2">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-3">Requests Over Time</MudText>
-                    <MudSimpleTable Dense="true">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Requests</th>
-                                <th>Visual</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var item in _requestsOverTime.Take(20))
-                            {
-                                <tr>
-                                    <td>@item.Time.ToString("HH:mm")</td>
-                                    <td>@item.Requests.ToString("N0")</td>
-                                    <td>
-                                        <MudProgressLinear Value="@(item.Requests * 100.0 / Math.Max(_requestsOverTime.Max(x => x.Requests), 1))" 
-                                                         Color="Color.Primary" Variant="Variant.Filled" />
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-        <MudItem xs="12" md="6">
-            <MudCard Elevation="2">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-3">Status Code Distribution</MudText>
-                    <MudSimpleTable Dense="true">
-                        <thead>
-                            <tr>
-                                <th>Status</th>
-                                <th>Count</th>
-                                <th>Percentage</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td><MudChip Size="Size.Small" Color="Color.Success">2xx</MudChip></td>
-                                <td>@_statusData.Status2xx.ToString("N0")</td>
-                                <td>@(_statusData.Total > 0 ? (_statusData.Status2xx * 100.0 / _statusData.Total).ToString("F1") : "0")%</td>
-                            </tr>
-                            <tr>
-                                <td><MudChip Size="Size.Small" Color="Color.Info">3xx</MudChip></td>
-                                <td>@_statusData.Status3xx.ToString("N0")</td>
-                                <td>@(_statusData.Total > 0 ? (_statusData.Status3xx * 100.0 / _statusData.Total).ToString("F1") : "0")%</td>
-                            </tr>
-                            <tr>
-                                <td><MudChip Size="Size.Small" Color="Color.Warning">4xx</MudChip></td>
-                                <td>@_statusData.Status4xx.ToString("N0")</td>
-                                <td>@(_statusData.Total > 0 ? (_statusData.Status4xx * 100.0 / _statusData.Total).ToString("F1") : "0")%</td>
-                            </tr>
-                            <tr>
-                                <td><MudChip Size="Size.Small" Color="Color.Error">5xx</MudChip></td>
-                                <td>@_statusData.Status5xx.ToString("N0")</td>
-                                <td>@(_statusData.Total > 0 ? (_statusData.Status5xx * 100.0 / _statusData.Total).ToString("F1") : "0")%</td>
-                            </tr>
-                        </tbody>
-                    </MudSimpleTable>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-        <MudItem xs="12" md="6">
-            <MudCard Elevation="2">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-3">Top Domains</MudText>
-                    <MudSimpleTable Dense="true">
-                        <thead>
-                            <tr>
-                                <th>Domain</th>
-                                <th>Requests</th>
-                                <th>Bandwidth</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var domain in _topDomains.Take(10))
-                            {
-                                <tr>
-                                    <td>@domain.Domain</td>
-                                    <td>@domain.Requests.ToString("N0")</td>
-                                    <td>@FormatBytes(domain.BytesSent)</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-        <MudItem xs="12" md="6">
-            <MudCard Elevation="2">
-                <MudCardContent>
-                    <MudText Typo="Typo.h6" Class="mb-3">Bandwidth Over Time</MudText>
-                    <MudSimpleTable Dense="true">
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Bandwidth</th>
-                                <th>Visual</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var item in _bandwidthOverTime.Take(20))
-                            {
-                                <tr>
-                                    <td>@item.Time.ToString("HH:mm")</td>
-                                    <td>@FormatBytes(item.Bytes)</td>
-                                    <td>
-                                        <MudProgressLinear Value="@(item.Bytes * 100.0 / Math.Max(_bandwidthOverTime.Max(x => x.Bytes), 1))" 
-                                                         Color="Color.Secondary" Variant="Variant.Filled" />
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </MudSimpleTable>
-                </MudCardContent>
-            </MudCard>
-        </MudItem>
-    </MudGrid>
+    @* ─── Top domains ─────────────────────────────────────── *@
+    <MudPaper Outlined="true" Class="pa-4 mb-4">
+        <MudText Typo="Typo.h6" Class="mb-3">Top domains</MudText>
+        @if (_topDomains.Any())
+        {
+            var maxReq = Math.Max(_topDomains.First().Requests, 1);
+            var idx = 0;
+            foreach (var d in _topDomains.Take(10))
+            {
+                idx++;
+                <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center" Class="mb-2">
+                    <MudAvatar Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">@idx</MudAvatar>
+                    <div style="flex:1;min-width:0;">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.body1" Style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@d.Domain</MudText>
+                            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                                <MudText Typo="Typo.body2">@d.Requests.ToString("N0") req</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Default">@FormatBytes(d.BytesSent)</MudText>
+                            </MudStack>
+                        </MudStack>
+                        <MudProgressLinear Value="@(d.Requests * 100.0 / maxReq)"
+                                           Color="Color.Primary"
+                                           Class="mt-1"
+                                           Size="Size.Small" />
+                    </div>
+                </MudStack>
+            }
+        }
+    </MudPaper>
 
-    @* Data Table *@
-    <MudCard Elevation="2">
-        <MudCardContent>
-            <MudText Typo="Typo.h6" Class="mb-3">Detailed Statistics</MudText>
-            <MudDataGrid Items="@_tableData" T="TrafficStatsHourly" 
-                        Hover="true" Striped="true" Dense="true"
-                        FilterMode="DataGridFilterMode.ColumnFilterRow"
-                        PageSize="25"
-                        RowsPerPageChanged="OnRowsPerPageChanged"
-                        CurrentPageChanged="OnPageChanged">
+    @* ─── Recent errors ───────────────────────────────────── *@
+    <MudPaper Outlined="true" Class="pa-4 mb-4">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3" Wrap="Wrap.Wrap">
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Color="Color.Error" />
+                <MudText Typo="Typo.h6">Recent errors</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Default">
+                    @_errorLogs.Count(l => l.StatusCode >= 400) shown (top @_errorLogLimit by time)
+                </MudText>
+            </MudStack>
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                <MudTextField @bind-Value="_errorSearch" Placeholder="Filter path / IP / UA…"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true"
+                              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                              Immediate="true" DebounceInterval="200"
+                              Class="mr-2" Style="min-width:220px;" />
+                <MudButton Variant="@(_errorFilter == ErrorFilter.All ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Default" Size="Size.Small" DisableElevation="true"
+                           OnClick="() => SetErrorFilter(ErrorFilter.All)">
+                    All <MudChip Size="Size.Small" Class="ml-2">@_errorCount4xx + @_errorCount5xx</MudChip>
+                </MudButton>
+                <MudButton Variant="@(_errorFilter == ErrorFilter.Client4xx ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Warning" Size="Size.Small" DisableElevation="true"
+                           OnClick="() => SetErrorFilter(ErrorFilter.Client4xx)">
+                    4xx <MudChip Size="Size.Small" Class="ml-2">@_errorCount4xx</MudChip>
+                </MudButton>
+                <MudButton Variant="@(_errorFilter == ErrorFilter.Server5xx ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Error" Size="Size.Small" DisableElevation="true"
+                           OnClick="() => SetErrorFilter(ErrorFilter.Server5xx)">
+                    5xx <MudChip Size="Size.Small" Class="ml-2">@_errorCount5xx</MudChip>
+                </MudButton>
+            </MudStack>
+        </MudStack>
+
+        @if (FilteredErrors.Any())
+        {
+            <MudTable Items="@FilteredErrors" Dense="true" Hover="true" Striped="true"
+                      Bordered="false" FixedHeader="true" Height="480px" Breakpoint="Breakpoint.Sm">
+                <HeaderContent>
+                    <MudTh Style="width:140px;">Time</MudTh>
+                    <MudTh Style="width:70px;">Status</MudTh>
+                    <MudTh Style="width:180px;">Domain</MudTh>
+                    <MudTh Style="width:70px;">Method</MudTh>
+                    <MudTh>Path</MudTh>
+                    <MudTh Style="width:130px;">IP</MudTh>
+                    <MudTh Style="width:90px;">Latency</MudTh>
+                    <MudTh Style="width:220px;">User agent</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Time">
+                        <MudText Typo="Typo.body2">@context.Timestamp.ToLocalTime().ToString("MM-dd HH:mm:ss")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Status">
+                        <MudChip Size="Size.Small" Variant="Variant.Filled"
+                                 Color="@(context.StatusCode >= 500 ? Color.Error : Color.Warning)">
+                            @context.StatusCode
+                        </MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="Domain">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@context.Domain</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Method">
+                        <MudChip Size="Size.Small" Variant="Variant.Outlined">@context.RequestMethod</MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="Path">
+                        <MudTooltip Text="@context.RequestPath" Placement="Placement.Top">
+                            <MudText Typo="Typo.body2"
+                                     Style="font-family:monospace;max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">
+                                @context.RequestPath
+                            </MudText>
+                        </MudTooltip>
+                    </MudTd>
+                    <MudTd DataLabel="IP">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@context.RemoteIp</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Latency">
+                        @if (context.ResponseTimeMs.HasValue)
+                        {
+                            <MudText Typo="Typo.body2">@($"{context.ResponseTimeMs.Value:F0} ms")</MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Default">—</MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="User agent">
+                        <MudTooltip Text="@(context.UserAgent ?? "—")" Placement="Placement.Top">
+                            <MudText Typo="Typo.caption" Color="Color.Default"
+                                     Style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">
+                                @ShortUa(context.UserAgent)
+                            </MudText>
+                        </MudTooltip>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Outlined">
+                No errors for the selected range. Nice.
+            </MudAlert>
+        }
+    </MudPaper>
+
+    @* ─── Detailed table (collapsible) ─────────────────────── *@
+    <MudExpansionPanels MultiExpansion="false" Elevation="0">
+        <MudExpansionPanel Text="Detailed statistics">
+            <MudDataGrid Items="@_tableData" T="TrafficStatsHourly"
+                         Hover="true" Striped="true" Dense="true"
+                         FilterMode="DataGridFilterMode.ColumnFilterRow"
+                         SortMode="SortMode.Multiple"
+                         PageSize="25">
                 <Columns>
                     <PropertyColumn Property="x => x.Domain" Title="Domain" Sortable="true" Filterable="true" />
-                    <PropertyColumn Property="x => x.Timestamp" Title="Timestamp" Sortable="true" Format="g" />
-                    <PropertyColumn Property="x => x.Requests" Title="Requests" Sortable="true" Format="N0" />
-                    <PropertyColumn Property="x => x.BytesSent" Title="Bytes Sent" Sortable="true">
-                        <CellTemplate>
-                            @FormatBytes(context.Item.BytesSent)
-                        </CellTemplate>
+                    <PropertyColumn Property="x => x.Timestamp" Title="Time" Sortable="true" Format="g" />
+                    <PropertyColumn Property="x => x.Requests" Title="Req" Sortable="true" Format="N0" />
+                    <PropertyColumn Property="x => x.BytesSent" Title="Bytes" Sortable="true">
+                        <CellTemplate>@FormatBytes(context.Item.BytesSent)</CellTemplate>
                     </PropertyColumn>
                     <PropertyColumn Property="x => x.Status2xx" Title="2xx" Sortable="true" />
                     <PropertyColumn Property="x => x.Status3xx" Title="3xx" Sortable="true" />
                     <PropertyColumn Property="x => x.Status4xx" Title="4xx" Sortable="true" />
                     <PropertyColumn Property="x => x.Status5xx" Title="5xx" Sortable="true" />
-                    <PropertyColumn Property="x => x.UniqueIps" Title="Unique IPs" Sortable="true" />
+                    <PropertyColumn Property="x => x.UniqueIps" Title="IPs" Sortable="true" />
                 </Columns>
                 <PagerContent>
                     <MudDataGridPager T="TrafficStatsHourly" />
                 </PagerContent>
             </MudDataGrid>
-        </MudCardContent>
-    </MudCard>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
 }
 
 @code {
+    private enum ChartMetric { Requests, Bandwidth }
+
     private bool _loading = true;
     private bool _autoRefresh = false;
     private System.Threading.Timer? _refreshTimer;
+    private DateTime? _lastLoadedAt;
+    private string? _errorMessage;
+
     private List<string> _allDomains = new();
-    private HashSet<string> _selectedDomains = new();
+    private IEnumerable<string> _selectedDomainsValues = new HashSet<string>();
     private int? _timeRangeHours = 24;
+    private ChartMetric _chartMetric = ChartMetric.Requests;
+
+    private readonly (int? Hours, string Label)[] _timeRanges = new (int?, string)[]
+    {
+        (1,   "1h"),
+        (12,  "12h"),
+        (24,  "24h"),
+        (168, "7d"),
+        (720, "30d"),
+        (null,"All"),
+    };
+
     private List<TrafficStatsHourly> _tableData = new();
-    
+    private List<RawPoint> _rawTimeline = new();
+    private int _bucketMinutes = 60;
+    private List<TrafficRequestLog> _errorLogs = new();
+    private const int _errorLogLimit = 500;
+    private ErrorFilter _errorFilter = ErrorFilter.All;
+    private string _errorSearch = string.Empty;
+    private int _errorCount4xx;
+    private int _errorCount5xx;
+
+    private enum ErrorFilter { All, Client4xx, Server5xx }
+
+    private IEnumerable<TrafficRequestLog> FilteredErrors
+    {
+        get
+        {
+            IEnumerable<TrafficRequestLog> src = _errorLogs;
+            src = _errorFilter switch
+            {
+                ErrorFilter.Client4xx => src.Where(l => l.StatusCode >= 400 && l.StatusCode < 500),
+                ErrorFilter.Server5xx => src.Where(l => l.StatusCode >= 500),
+                _ => src.Where(l => l.StatusCode >= 400),
+            };
+            if (!string.IsNullOrWhiteSpace(_errorSearch))
+            {
+                var q = _errorSearch.Trim();
+                src = src.Where(l =>
+                    (l.RequestPath?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (l.RemoteIp?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (l.Domain?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (l.UserAgent?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+            return src;
+        }
+    }
+
     private KpiData _kpiData = new();
     private List<TimeDataPoint> _requestsOverTime = new();
     private List<TimeDataPoint> _bandwidthOverTime = new();
     private StatusData _statusData = new();
     private List<DomainData> _topDomains = new();
+
+    private List<ChartSeries> _lineSeries = new();
+    private string[] _lineLabels = Array.Empty<string>();
+    private readonly ChartOptions _lineOptions = new()
+    {
+        LineStrokeWidth = 2,
+        // NaturalSpline blows up below 4 points; Straight is safe and renders cleanly
+        InterpolationOption = InterpolationOption.Straight,
+        YAxisFormat = "N0",
+        DisableLegend = true,
+    };
+
+    private double[] _donutData = Array.Empty<double>();
+    private string[] _donutLabels = Array.Empty<string>();
 
     private class KpiData
     {
@@ -305,6 +414,12 @@ else
         public double ErrorRate { get; set; }
         public int UniqueIps { get; set; }
         public int ActiveDomains { get; set; }
+    }
+
+    private class RawPoint
+    {
+        public DateTime Timestamp { get; set; }
+        public long BytesSent { get; set; }
     }
 
     private class TimeDataPoint
@@ -333,11 +448,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         await LoadData();
-        
-        if (_autoRefresh)
-        {
-            StartAutoRefresh();
-        }
+        if (_autoRefresh) StartAutoRefresh();
     }
 
     private async Task LoadData()
@@ -345,60 +456,102 @@ else
         try
         {
             _loading = true;
+            _errorMessage = null;
             StateHasChanged();
 
-            // Load domains
             _allDomains = await StatsDbContext.TrafficStatsHourly
                 .Select(s => s.Domain)
                 .Distinct()
                 .OrderBy(d => d)
                 .ToListAsync();
 
-            // Build query
             var query = StatsDbContext.TrafficStatsHourly.AsQueryable();
 
-            // Apply time filter
             if (_timeRangeHours.HasValue)
             {
                 var cutoff = DateTime.UtcNow.AddHours(-_timeRangeHours.Value);
                 query = query.Where(s => s.Timestamp >= cutoff);
             }
 
-            // Apply domain filter
-            if (_selectedDomains.Any())
+            var selectedSet = _selectedDomainsValues?.ToHashSet() ?? new HashSet<string>();
+            if (selectedSet.Count > 0)
             {
-                query = query.Where(s => _selectedDomains.Contains(s.Domain));
+                query = query.Where(s => selectedSet.Contains(s.Domain));
             }
 
-            // Load table data
             _tableData = await query
                 .OrderByDescending(s => s.Timestamp)
                 .ThenByDescending(s => s.Requests)
                 .ToListAsync();
 
-            // Calculate KPIs
+            // Recent errors — pulls individual request logs (4xx/5xx) for the same filter window.
+            var errorQuery = StatsDbContext.TrafficRequestLogs.Where(l => l.StatusCode >= 400);
+            if (_timeRangeHours.HasValue)
+            {
+                var cutoff = DateTime.UtcNow.AddHours(-_timeRangeHours.Value);
+                errorQuery = errorQuery.Where(l => l.Timestamp >= cutoff);
+            }
+            if (selectedSet.Count > 0)
+            {
+                errorQuery = errorQuery.Where(l => selectedSet.Contains(l.Domain));
+            }
+            _errorLogs = await errorQuery
+                .OrderByDescending(l => l.Timestamp)
+                .Take(_errorLogLimit)
+                .ToListAsync();
+            _errorCount4xx = _errorLogs.Count(l => l.StatusCode >= 400 && l.StatusCode < 500);
+            _errorCount5xx = _errorLogs.Count(l => l.StatusCode >= 500);
+
+            // Pull a lightweight timeline from raw request logs for fine-grained charts.
+            // TrafficRequestLogs is kept for ~7 days; if the user picks a longer range we
+            // fall back to the hourly aggregate below in BuildVisualizations.
+            _bucketMinutes = PickBucketMinutes(_timeRangeHours);
+            if (_bucketMinutes < 60)
+            {
+                var logTimeline = StatsDbContext.TrafficRequestLogs.AsQueryable();
+                if (_timeRangeHours.HasValue)
+                {
+                    var cutoff = DateTime.UtcNow.AddHours(-_timeRangeHours.Value);
+                    logTimeline = logTimeline.Where(l => l.Timestamp >= cutoff);
+                }
+                if (selectedSet.Count > 0)
+                {
+                    logTimeline = logTimeline.Where(l => selectedSet.Contains(l.Domain));
+                }
+                _rawTimeline = await logTimeline
+                    .Select(l => new RawPoint { Timestamp = l.Timestamp, BytesSent = l.BytesSent })
+                    .Take(200_000)
+                    .ToListAsync();
+            }
+            else
+            {
+                _rawTimeline = new List<RawPoint>();
+            }
+
             _kpiData = new KpiData
             {
                 TotalRequests = _tableData.Sum(s => s.Requests),
                 TotalBandwidth = _tableData.Sum(s => s.BytesSent + s.BytesReceived),
                 UniqueIps = _tableData.Sum(s => s.UniqueIps),
-                ActiveDomains = _tableData.Select(s => s.Domain).Distinct().Count()
+                ActiveDomains = _tableData.Select(s => s.Domain).Distinct().Count(),
             };
 
-            var totalRequests = _kpiData.TotalRequests;
-            if (totalRequests > 0)
+            if (_kpiData.TotalRequests > 0)
             {
                 var errorRequests = _tableData.Sum(s => s.Status4xx + s.Status5xx);
-                _kpiData.ErrorRate = (errorRequests * 100.0) / totalRequests;
+                _kpiData.ErrorRate = errorRequests * 100.0 / _kpiData.TotalRequests;
             }
 
-            // Build visualizations
             BuildVisualizations();
+            BuildChartSeries();
 
-            _loading = false;
-            StateHasChanged();
+            _lastLoadedAt = DateTime.UtcNow;
         }
-        catch (Exception)
+        catch (Exception ex)
+        {
+            _errorMessage = $"Failed to load stats: {ex.Message}";
+        }
+        finally
         {
             _loading = false;
             StateHasChanged();
@@ -407,48 +560,121 @@ else
 
     private void BuildVisualizations()
     {
-        // Requests over time
-        _requestsOverTime = _tableData
-            .GroupBy(s => s.Timestamp)
-            .Select(g => new TimeDataPoint
-            {
-                Time = g.Key,
-                Requests = g.Sum(s => s.Requests)
-            })
-            .OrderBy(x => x.Time)
-            .ToList();
+        // Choose timeline source: raw request logs (fine bucketed) for short ranges,
+        // hourly aggregate for long ranges or fallback. Empty buckets get zero so the
+        // line stays continuous and you can see drops in traffic.
+        if (_bucketMinutes < 60 && _rawTimeline.Count > 0)
+        {
+            var bucketed = _rawTimeline
+                .GroupBy(p => BucketStart(p.Timestamp, _bucketMinutes))
+                .Select(g => new TimeDataPoint
+                {
+                    Time = g.Key,
+                    Requests = g.LongCount(),
+                    Bytes = g.Sum(p => p.BytesSent),
+                })
+                .OrderBy(x => x.Time)
+                .ToList();
+            (_requestsOverTime, _bandwidthOverTime) = FillBucketGaps(bucketed, _bucketMinutes);
+        }
+        else
+        {
+            // Hourly aggregate fallback (older data beyond raw-log retention).
+            var combined = _tableData
+                .GroupBy(s => s.Timestamp)
+                .Select(g => new TimeDataPoint
+                {
+                    Time = g.Key,
+                    Requests = g.Sum(s => s.Requests),
+                    Bytes = g.Sum(s => s.BytesSent),
+                })
+                .OrderBy(x => x.Time)
+                .ToList();
+            _requestsOverTime = combined;
+            _bandwidthOverTime = combined;
+        }
 
-        // Bandwidth over time
-        _bandwidthOverTime = _tableData
-            .GroupBy(s => s.Timestamp)
-            .Select(g => new TimeDataPoint
-            {
-                Time = g.Key,
-                Bytes = g.Sum(s => s.BytesSent)
-            })
-            .OrderBy(x => x.Time)
-            .ToList();
-
-        // Status code distribution
         _statusData = new StatusData
         {
             Status2xx = _tableData.Sum(s => s.Status2xx),
             Status3xx = _tableData.Sum(s => s.Status3xx),
             Status4xx = _tableData.Sum(s => s.Status4xx),
-            Status5xx = _tableData.Sum(s => s.Status5xx)
+            Status5xx = _tableData.Sum(s => s.Status5xx),
         };
 
-        // Top domains
         _topDomains = _tableData
             .GroupBy(s => s.Domain)
             .Select(g => new DomainData
             {
                 Domain = g.Key,
                 Requests = g.Sum(s => s.Requests),
-                BytesSent = g.Sum(s => s.BytesSent)
+                BytesSent = g.Sum(s => s.BytesSent),
             })
             .OrderByDescending(d => d.Requests)
             .ToList();
+    }
+
+    private void BuildChartSeries()
+    {
+        // Donut
+        if (_statusData.Total > 0)
+        {
+            var values = new List<double>();
+            var labels = new List<string>();
+            void Push(long v, string label) { if (v > 0) { values.Add(v); labels.Add(label); } }
+            Push(_statusData.Status2xx, "2xx");
+            Push(_statusData.Status3xx, "3xx");
+            Push(_statusData.Status4xx, "4xx");
+            Push(_statusData.Status5xx, "5xx");
+            _donutData = values.ToArray();
+            _donutLabels = labels.ToArray();
+        }
+        else
+        {
+            _donutData = Array.Empty<double>();
+            _donutLabels = Array.Empty<string>();
+        }
+
+        // Line series — derived from the chosen metric
+        var src = _chartMetric == ChartMetric.Requests ? _requestsOverTime : _bandwidthOverTime;
+        if (src.Count == 0)
+        {
+            _lineSeries = new();
+            _lineLabels = Array.Empty<string>();
+            return;
+        }
+
+        double scale = 1.0;
+        string seriesName = "Requests";
+        if (_chartMetric == ChartMetric.Bandwidth)
+        {
+            // pick a unit so values are readable: KB / MB / GB
+            var max = src.Max(p => p.Bytes);
+            if (max >= 1L << 30) { scale = 1L << 30; seriesName = "Bandwidth (GB)"; }
+            else if (max >= 1L << 20) { scale = 1L << 20; seriesName = "Bandwidth (MB)"; }
+            else if (max >= 1L << 10) { scale = 1L << 10; seriesName = "Bandwidth (KB)"; }
+            else { scale = 1.0; seriesName = "Bandwidth (B)"; }
+        }
+
+        var data = src.Select(p => _chartMetric == ChartMetric.Requests
+            ? (double)p.Requests
+            : p.Bytes / scale).ToArray();
+
+        // Thin labels — show at most ~10 ticks so they don't squash
+        var step = Math.Max(1, (int)Math.Ceiling(src.Count / 10.0));
+        _lineLabels = src.Select((p, i) => i % step == 0 ? p.Time.ToLocalTime().ToString(_timeRangeHours is null or > 48 ? "MM-dd HH:mm" : "HH:mm") : "")
+                          .ToArray();
+
+        _lineSeries = new List<ChartSeries>
+        {
+            new ChartSeries { Name = seriesName, Data = data },
+        };
+
+        // NaturalSpline requires ≥4 points; downgrade to Straight when the series is short.
+        _lineOptions.InterpolationOption = data.Length >= 4
+            ? InterpolationOption.NaturalSpline
+            : InterpolationOption.Straight;
+        _lineOptions.YAxisFormat = _chartMetric == ChartMetric.Requests ? "N0" : "N1";
     }
 
     private async Task SelectTimeRange(int? hours)
@@ -457,35 +683,76 @@ else
         await LoadData();
     }
 
-    private async Task SelectDomain(string? domain)
+    private async Task OnDomainsChanged(IEnumerable<string> values)
     {
-        if (domain == null)
-        {
-            _selectedDomains.Clear();
-        }
-        else
-        {
-            if (_selectedDomains.Contains(domain))
-            {
-                _selectedDomains.Remove(domain);
-            }
-            else
-            {
-                _selectedDomains.Add(domain);
-            }
-        }
+        _selectedDomainsValues = values?.ToList() ?? new List<string>();
         await LoadData();
     }
 
-
-    private async Task OnRowsPerPageChanged(int pageSize)
+    private void SetMetric(ChartMetric m)
     {
-        await Task.CompletedTask;
+        _chartMetric = m;
+        BuildChartSeries();
+        StateHasChanged();
     }
 
-    private async Task OnPageChanged(int page)
+    private void SetErrorFilter(ErrorFilter f)
     {
-        await Task.CompletedTask;
+        _errorFilter = f;
+        StateHasChanged();
+    }
+
+    private static int PickBucketMinutes(int? hours) => hours switch
+    {
+        null => 60 * 24,           // all → 1d
+        <= 1 => 1,                 // 1h  → 1min
+        <= 12 => 5,                // 12h → 5min
+        <= 24 => 15,               // 24h → 15min
+        <= 48 => 30,               // 48h → 30min
+        <= 168 => 60,              // 7d  → 1h (hourly aggregate)
+        _ => 60 * 4,               // 30d → 4h (hourly aggregate)
+    };
+
+    private static DateTime BucketStart(DateTime t, int bucketMinutes)
+    {
+        var u = t.Kind == DateTimeKind.Utc ? t : t.ToUniversalTime();
+        var totalMin = (long)Math.Floor((u - DateTime.UnixEpoch).TotalMinutes);
+        var snapped = totalMin - (totalMin % bucketMinutes);
+        return DateTime.SpecifyKind(DateTime.UnixEpoch.AddMinutes(snapped), DateTimeKind.Utc);
+    }
+
+    private (List<TimeDataPoint> Requests, List<TimeDataPoint> Bytes) FillBucketGaps(
+        List<TimeDataPoint> bucketed, int bucketMinutes)
+    {
+        if (bucketed.Count <= 1) return (bucketed, bucketed);
+        var step = TimeSpan.FromMinutes(bucketMinutes);
+        var first = bucketed.First().Time;
+        var last = bucketed.Last().Time;
+        var byKey = bucketed.ToDictionary(b => b.Time);
+        var requests = new List<TimeDataPoint>();
+        var bytes = new List<TimeDataPoint>();
+        for (var t = first; t <= last; t = t.Add(step))
+        {
+            if (byKey.TryGetValue(t, out var p))
+            {
+                requests.Add(new TimeDataPoint { Time = t, Requests = p.Requests });
+                bytes.Add(new TimeDataPoint { Time = t, Bytes = p.Bytes });
+            }
+            else
+            {
+                requests.Add(new TimeDataPoint { Time = t, Requests = 0 });
+                bytes.Add(new TimeDataPoint { Time = t, Bytes = 0 });
+            }
+        }
+        return (requests, bytes);
+    }
+
+    private static string ShortUa(string? ua)
+    {
+        if (string.IsNullOrWhiteSpace(ua) || ua == "-") return "—";
+        // Common rough buckets: just return the first chunk for readability.
+        var idx = ua.IndexOf(' ');
+        return idx > 0 ? ua[..Math.Min(40, idx)] : ua[..Math.Min(40, ua.Length)];
     }
 
     private async Task ExportToCsv()
@@ -494,48 +761,74 @@ else
         {
             var csv = new System.Text.StringBuilder();
             csv.AppendLine("Domain,Timestamp,Requests,Bytes Sent,Bytes Received,2xx,3xx,4xx,5xx,Unique IPs");
-
-            foreach (var stat in _tableData)
+            foreach (var s in _tableData)
             {
-                csv.AppendLine($"{stat.Domain},{stat.Timestamp:yyyy-MM-dd HH:mm:ss},{stat.Requests},{stat.BytesSent},{stat.BytesReceived},{stat.Status2xx},{stat.Status3xx},{stat.Status4xx},{stat.Status5xx},{stat.UniqueIps}");
+                csv.AppendLine($"{s.Domain},{s.Timestamp:yyyy-MM-dd HH:mm:ss},{s.Requests},{s.BytesSent},{s.BytesReceived},{s.Status2xx},{s.Status3xx},{s.Status4xx},{s.Status5xx},{s.UniqueIps}");
             }
-
             var fileName = $"traffic_stats_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
             await JSRuntime.InvokeVoidAsync("downloadFile", fileName, csv.ToString());
         }
-        catch
+        catch (Exception ex)
         {
-            // Log error
+            _errorMessage = $"Export failed: {ex.Message}";
+            StateHasChanged();
         }
     }
 
     private void StartAutoRefresh()
     {
         _refreshTimer?.Dispose();
-        _refreshTimer = new System.Threading.Timer(async _ =>
+        _refreshTimer = new System.Threading.Timer(_ =>
         {
-            await InvokeAsync(async () =>
-            {
-                await LoadData();
-            });
+            InvokeAsync(LoadData);
         }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
     }
 
-    private string FormatBytes(long bytes)
+    private static string FormatBytes(long bytes)
     {
         string[] sizes = { "B", "KB", "MB", "GB", "TB" };
         double len = bytes;
         int order = 0;
-        while (len >= 1024 && order < sizes.Length - 1)
-        {
-            order++;
-            len = len / 1024;
-        }
+        while (len >= 1024 && order < sizes.Length - 1) { order++; len /= 1024; }
         return $"{len:0.##} {sizes[order]}";
     }
 
-    public void Dispose()
+    private static string TimeRangeLabel(int? hours) => hours switch
     {
-        _refreshTimer?.Dispose();
-    }
+        null => "all time",
+        1 => "last hour",
+        12 => "last 12h",
+        24 => "last 24h",
+        168 => "last 7 days",
+        720 => "last 30 days",
+        _ => $"last {hours}h",
+    };
+
+    private RenderFragment KpiCard(string title, string value, string icon, Color color) =>
+    @<MudItem xs="12" sm="6" md="4" lg="2" @key="title">
+        <MudPaper Outlined="true" Class="pa-3" Style="height:100%;">
+            <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center">
+                <MudAvatar Color="@color" Variant="Variant.Filled" Size="Size.Medium">
+                    <MudIcon Icon="@icon" />
+                </MudAvatar>
+                <div style="min-width:0;">
+                    <MudText Typo="Typo.caption" Color="Color.Default" Style="text-transform:uppercase;letter-spacing:0.5px;">@title</MudText>
+                    <MudText Typo="Typo.h5" Style="font-weight:600;line-height:1.2;">@value</MudText>
+                </div>
+            </MudStack>
+        </MudPaper>
+    </MudItem>;
+
+    private RenderFragment StatusRow(string label, long value, Color color) =>
+    @<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" @key="label">
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+            <MudChip Size="Size.Small" Color="@color" Variant="Variant.Filled">@label</MudChip>
+        </MudStack>
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+            <MudText Typo="Typo.body2">@value.ToString("N0")</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Default">@(_statusData.Total > 0 ? (value * 100.0 / _statusData.Total).ToString("F1") : "0")%</MudText>
+        </MudStack>
+    </MudStack>;
+
+    public void Dispose() => _refreshTimer?.Dispose();
 }

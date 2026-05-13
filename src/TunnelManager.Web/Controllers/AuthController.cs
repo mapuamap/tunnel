@@ -1,19 +1,25 @@
 using Logger_MM.Agent;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace TunnelManager.Web.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class AuthController : ControllerBase
 {
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthController> _logger;
     private readonly LoggerMMAgent? _loggerMM;
+    private static readonly PasswordHasher<string> _hasher = new();
 
     public AuthController(IConfiguration configuration, ILogger<AuthController> logger, LoggerMMAgent? loggerMM = null)
     {
@@ -24,6 +30,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("login")]
     [AllowAnonymous]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
         if (string.IsNullOrEmpty(request.Username) || string.IsNullOrEmpty(request.Password))
@@ -54,6 +61,11 @@ public class AuthController : ControllerBase
 
     [HttpPost("login-form")]
     [AllowAnonymous]
+    [EnableRateLimiting("auth")]
+    // Antiforgery on login-form is intentionally NOT enforced via [ValidateAntiForgeryToken].
+    // The Blazor Server interactive renderer does not embed <AntiforgeryToken/> into the SSR
+    // DOM in this layout, so enforcing it breaks legitimate form submission. CSRF protection
+    // for the login flow comes from SameSite=Strict on the auth cookie + the rate-limit policy.
     public async Task<IActionResult> LoginForm([FromForm] string username, [FromForm] string password, [FromForm] string? returnUrl)
     {
         if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
@@ -72,7 +84,9 @@ public class AuthController : ControllerBase
                 @params: new { username, returnUrl },
                 tags: new[] { "auth", "login" });
 
-            var targetUrl = string.IsNullOrEmpty(returnUrl) ? "/" : Uri.UnescapeDataString(returnUrl);
+            // Open-redirect guard: only allow local URLs as redirect targets.
+            var decoded = string.IsNullOrEmpty(returnUrl) ? "/" : Uri.UnescapeDataString(returnUrl);
+            var targetUrl = Url.IsLocalUrl(decoded) ? decoded : "/";
             return Redirect(targetUrl);
         }
 
@@ -123,10 +137,45 @@ public class AuthController : ControllerBase
     private bool ValidateCredentials(string username, string password)
     {
         var configUsername = _configuration["Auth:Username"];
-        var configPassword = _configuration["Auth:Password"];
+        if (string.IsNullOrEmpty(configUsername) ||
+            !username.Equals(configUsername, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
 
-        return username.Equals(configUsername, StringComparison.OrdinalIgnoreCase) &&
-               password == configPassword;
+        // Preferred: PBKDF2 hash via PasswordHasher (Identity)
+        var hash = _configuration["Auth:PasswordHash"];
+        if (!string.IsNullOrEmpty(hash))
+        {
+            try
+            {
+                var res = _hasher.VerifyHashedPassword(configUsername, hash, password);
+                return res == PasswordVerificationResult.Success
+                    || res == PasswordVerificationResult.SuccessRehashNeeded;
+            }
+            catch (FormatException ex)
+            {
+                _logger.LogError(ex, "[Auth] Auth:PasswordHash is malformed — falling back to plaintext if available");
+            }
+        }
+
+        // Legacy fallback: plaintext password (rolling-migration only)
+        var configPassword = _configuration["Auth:Password"];
+        if (string.IsNullOrEmpty(configPassword)) return false;
+        return FixedTimeEquals(password, configPassword);
+    }
+
+    private static bool FixedTimeEquals(string a, string b)
+    {
+        var ab = Encoding.UTF8.GetBytes(a);
+        var bb = Encoding.UTF8.GetBytes(b);
+        if (ab.Length != bb.Length)
+        {
+            // Still run the comparison to keep timing similar regardless of length match.
+            CryptographicOperations.FixedTimeEquals(ab, ab);
+            return false;
+        }
+        return CryptographicOperations.FixedTimeEquals(ab, bb);
     }
 
     private async Task SignInUserAsync(string username)

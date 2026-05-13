@@ -186,16 +186,14 @@ public class NginxService
         var configPath = $"{ConfigDir}/{config.Domain}";
         var enabledPath = $"{EnabledDir}/{config.Domain}";
 
-        var wsConfig = config.HasWebSocket ? @"
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection ""upgrade"";" : "";
-
+        // WebSocket upgrade headers are safe even for HTTP-only apps — they activate only
+        // when the client sends Upgrade: websocket. Long timeouts + buffering off keep
+        // WebSocket connections alive and prevent UI flicker for real-time apps.
         var nginxConfig = $@"server {{
     listen 80;
     server_name {config.Domain};
     client_max_body_size 50m;
-    
+
     location / {{
         proxy_pass http://{config.Target};
         proxy_set_header Host $host;
@@ -205,7 +203,20 @@ public class NginxService
 
         # Prevent stale cache after redeploy
         proxy_hide_header Cache-Control;
-        add_header Cache-Control ""no-cache"";{wsConfig}
+        add_header Cache-Control ""no-cache"";
+
+        # WebSocket upgrade (safe defaults; active only for upgrade requests)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection ""upgrade"";
+
+        # Long timeouts so long-lived WebSocket / SSE connections don't drop
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+
+        # Disable buffering for real-time updates (HA Lovelace, n8n, llm streaming, etc.)
+        proxy_buffering off;
+        proxy_request_buffering off;
     }}
 }}";
 
@@ -249,6 +260,9 @@ public class NginxService
             tags: new[] { "nginx", "forward", "update" });
 
         // Build location block content
+        // WebSocket + long timeouts + buffering off are now safe defaults for ALL forwards
+        // (WS headers activate only on Upgrade requests; timeouts/buffering prevent
+        // real-time UI flicker — HA Lovelace, n8n editor, LLM token streams).
         var locationLines = new List<string>
         {
             $"        proxy_pass http://{config.Target};",
@@ -258,15 +272,18 @@ public class NginxService
             "        proxy_set_header X-Forwarded-Proto $scheme;",
             "        # Prevent stale cache after redeploy",
             "        proxy_hide_header Cache-Control;",
-            "        add_header Cache-Control \"no-cache\";"
+            "        add_header Cache-Control \"no-cache\";",
+            "        # WebSocket upgrade (safe defaults)",
+            "        proxy_http_version 1.1;",
+            "        proxy_set_header Upgrade $http_upgrade;",
+            "        proxy_set_header Connection \"upgrade\";",
+            "        # Long timeouts for WebSocket / SSE",
+            "        proxy_read_timeout 86400s;",
+            "        proxy_send_timeout 86400s;",
+            "        # Disable buffering for real-time updates",
+            "        proxy_buffering off;",
+            "        proxy_request_buffering off;"
         };
-
-        if (config.HasWebSocket)
-        {
-            locationLines.Add("        proxy_http_version 1.1;");
-            locationLines.Add("        proxy_set_header Upgrade $http_upgrade;");
-            locationLines.Add("        proxy_set_header Connection \"upgrade\";");
-        }
 
         // Preserve auth if exists in original
         var authMatch = Regex.Match(existingContent, @"(auth_basic\s+""[^""]*"";)\s*(auth_basic_user_file\s+[^;]+;)");
@@ -299,12 +316,7 @@ public class NginxService
         }
         else
         {
-            // Build fresh HTTP-only config
-            var wsConfig = config.HasWebSocket ? @"
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection ""upgrade"";" : "";
-
+            // Build fresh HTTP-only config with safe defaults for WS + timeouts + buffering
             var authConfig = "";
             if (authMatch.Success)
             {
@@ -315,7 +327,7 @@ public class NginxService
     listen 80;
     server_name {domain};
     client_max_body_size 50m;
-    
+
     location / {{
         proxy_pass http://{config.Target};
         proxy_set_header Host $host;
@@ -325,7 +337,20 @@ public class NginxService
 
         # Prevent stale cache after redeploy
         proxy_hide_header Cache-Control;
-        add_header Cache-Control ""no-cache"";{wsConfig}{authConfig}
+        add_header Cache-Control ""no-cache"";
+
+        # WebSocket upgrade (safe defaults; active only for upgrade requests)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection ""upgrade"";
+
+        # Long timeouts so long-lived WebSocket / SSE connections don't drop
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+
+        # Disable buffering for real-time updates
+        proxy_buffering off;
+        proxy_request_buffering off;{authConfig}
     }}
 }}";
         }

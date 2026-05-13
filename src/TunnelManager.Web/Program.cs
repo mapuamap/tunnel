@@ -2,7 +2,10 @@ using Logger_MM.Agent;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 using MudBlazor.Services;
 using Npgsql;
 using TunnelManager.Web.Components;
@@ -10,6 +13,15 @@ using TunnelManager.Web.Data;
 using TunnelManager.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Trust X-Forwarded-Proto/-For from the front-line reverse proxy (tunnelmanager_nginx).
+// Without this, Blazor Server and cookie auth see HTTP and emit insecure cookies.
+builder.Services.Configure<ForwardedHeadersOptions>(opt =>
+{
+    opt.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    opt.KnownNetworks.Clear();
+    opt.KnownProxies.Clear();
+});
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
@@ -37,6 +49,7 @@ builder.Services.AddSingleton<NginxService>();
 builder.Services.AddSingleton<NginxAuthService>();
 builder.Services.AddSingleton<SshTunnelService>();
 builder.Services.AddSingleton<WireGuardService>();
+builder.Services.AddSingleton<FolderService>();
 
 // Add health check service
 builder.Services.AddSingleton<HealthCheckService>();
@@ -52,6 +65,10 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.LoginPath = "/login";
         options.LogoutPath = "/api/auth/logout";
         options.ExpireTimeSpan = TimeSpan.FromHours(24);
+        // Stage 4: harden cookie. App always runs behind TLS-terminating nginx now.
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.HttpOnly = true;
     });
 
 builder.Services.AddAuthorization();
@@ -59,8 +76,34 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<AuthenticationStateProvider, ServerAuthenticationStateProvider>();
 builder.Services.AddHttpContextAccessor();
 
-// Add controllers for API endpoints
-builder.Services.AddControllers();
+// Add controllers for API endpoints.
+// `WithViews` is needed so [ValidateAntiForgeryToken] filter resolves its DI dependencies.
+builder.Services.AddControllersWithViews();
+
+// Stage 5: rate-limit login endpoints to mitigate brute-force. 10 attempts / minute / IP.
+// Real client IP comes from X-Forwarded-For (already trusted via ForwardedHeaders middleware).
+builder.Services.AddRateLimiter(opt =>
+{
+    opt.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    opt.OnRejected = async (context, token) =>
+    {
+        // Write the 429 body before the global StatusCodePages middleware can re-execute it.
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            "{\"error\":\"Too many requests\",\"retryAfterSeconds\":60}", token);
+    };
+    opt.AddPolicy("auth", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            }));
+});
 
 // Configure DataProtection to use persistent storage
 var keysPath = Path.Combine("/app", "data", "keys");
@@ -156,6 +199,8 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 // Disable HTTPS redirection for HTTP-only deployment
 // app.UseHttpsRedirection();
 
+app.UseForwardedHeaders();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();

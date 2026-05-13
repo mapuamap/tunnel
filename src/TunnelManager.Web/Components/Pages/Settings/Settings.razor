@@ -1,0 +1,105 @@
+@page "/settings"
+@using Microsoft.AspNetCore.Authorization
+@using TunnelManager.Web.Services
+@attribute [Authorize]
+@inject FolderService FolderService
+@inject ISnackbar Snackbar
+
+<PageTitle>Settings - Tunnel Manager</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Settings</MudText>
+
+<MudCard Class="mb-4">
+    <MudCardHeader>
+        <CardHeaderContent>
+            <MudText Typo="Typo.h6">Folders</MudText>
+            <MudText Typo="Typo.body2">Available folder labels for HTTP forwards.</MudText>
+        </CardHeaderContent>
+    </MudCardHeader>
+    <MudCardContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+            <MudTextField @bind-Value="_newFolder"
+                          Label="New folder"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true"
+                          OnKeyDown="OnNewFolderKeyDown" />
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="AddFolder">
+                Add
+            </MudButton>
+        </MudStack>
+
+        @if (_folders.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary">No folders defined yet.</MudText>
+        }
+        else
+        {
+            <MudList T="string" Dense="true">
+                @foreach (var folder in _folders)
+                {
+                    <MudListItem T="string">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
+                            <MudText>@folder</MudText>
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           OnClick="() => RemoveFolder(folder)"
+                                           Title="Remove" />
+                        </MudStack>
+                    </MudListItem>
+                }
+            </MudList>
+        }
+    </MudCardContent>
+</MudCard>
+
+@code {
+    private List<string> _folders = new();
+    private string _newFolder = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        _folders = FolderService.GetFolders();
+    }
+
+    private void AddFolder()
+    {
+        var name = (_newFolder ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        if (FolderService.AddFolder(name))
+        {
+            _newFolder = string.Empty;
+            _folders = FolderService.GetFolders();
+            Snackbar.Add($"Folder '{name}' added", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add($"Folder '{name}' already exists", Severity.Warning);
+        }
+    }
+
+    private void RemoveFolder(string folder)
+    {
+        if (FolderService.RemoveFolder(folder))
+        {
+            _folders = FolderService.GetFolders();
+            Snackbar.Add($"Folder '{folder}' removed", Severity.Success);
+        }
+    }
+
+    private void OnNewFolderKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            AddFolder();
+        }
+    }
+}

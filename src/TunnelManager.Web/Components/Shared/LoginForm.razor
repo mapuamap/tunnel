@@ -11,6 +11,7 @@
         </div>
 
         <form method="post" action="/api/auth/login-form">
+            <AntiforgeryToken />
             <input type="hidden" name="returnUrl" value="@GetReturnUrl()" />
             
             <div class="form-group mb-4">

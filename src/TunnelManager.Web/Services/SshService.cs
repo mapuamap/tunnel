@@ -12,9 +12,11 @@ public class SshService : IDisposable
 {
     private readonly string _host;
     private readonly string _user;
-    private readonly string _password;
+    private readonly string? _password;
+    private readonly string? _privateKeyPath;
+    private readonly string _authMode;  // "key" or "password"
     private readonly LoggerMMAgent? _logger;
-    
+
     private SshClient? _sshClient;
     private SftpClient? _sftpClient;
     private readonly object _sshLock = new();
@@ -24,8 +26,33 @@ public class SshService : IDisposable
     {
         _host = configuration["Vps:Host"] ?? throw new InvalidOperationException("Vps:Host not configured");
         _user = configuration["Vps:User"] ?? throw new InvalidOperationException("Vps:User not configured");
-        _password = configuration["Vps:Password"] ?? throw new InvalidOperationException("Vps:Password not configured");
+        _password = configuration["Vps:Password"];
+        _privateKeyPath = configuration["Vps:PrivateKeyPath"];
         _logger = logger;
+
+        if (!string.IsNullOrEmpty(_privateKeyPath) && File.Exists(_privateKeyPath))
+        {
+            _authMode = "key";
+        }
+        else if (!string.IsNullOrEmpty(_password))
+        {
+            _authMode = "password";
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "Neither Vps:PrivateKeyPath (with existing file) nor Vps:Password is configured");
+        }
+    }
+
+    private Renci.SshNet.ConnectionInfo BuildConnectionInfo()
+    {
+        if (_authMode == "key")
+        {
+            var keyFile = new PrivateKeyFile(_privateKeyPath!);
+            return new Renci.SshNet.ConnectionInfo(_host, _user, new PrivateKeyAuthenticationMethod(_user, keyFile));
+        }
+        return new Renci.SshNet.ConnectionInfo(_host, _user, new PasswordAuthenticationMethod(_user, _password!));
     }
 
     private SshClient GetSshClient()
@@ -36,16 +63,16 @@ public class SshService : IDisposable
                 return _sshClient;
 
             _sshClient?.Dispose();
-            _logger?.Debug("SshService", "GetSshClient", $"Connecting to SSH host {_host}",
+            _logger?.Debug("SshService", "GetSshClient", $"Connecting to SSH host {_host} (auth={_authMode})",
                 tags: new[] { "ssh", "connection" });
 
-            _sshClient = new SshClient(_host, _user, _password);
+            _sshClient = new SshClient(BuildConnectionInfo());
             _sshClient.KeepAliveInterval = TimeSpan.FromSeconds(30);
             try
             {
                 _sshClient.Connect();
-                _logger?.Info("SshService", "GetSshClient", $"Successfully connected to SSH host {_host}",
-                    @params: new { host = _host, user = _user },
+                _logger?.Info("SshService", "GetSshClient", $"Successfully connected to SSH host {_host} (auth={_authMode})",
+                    @params: new { host = _host, user = _user, authMode = _authMode },
                     tags: new[] { "ssh", "connection" });
             }
             catch (Exception ex)
@@ -68,16 +95,16 @@ public class SshService : IDisposable
                 return _sftpClient;
 
             _sftpClient?.Dispose();
-            _logger?.Debug("SshService", "GetSftpClient", $"Connecting to SFTP host {_host}",
+            _logger?.Debug("SshService", "GetSftpClient", $"Connecting to SFTP host {_host} (auth={_authMode})",
                 tags: new[] { "ssh", "sftp", "connection" });
 
-            _sftpClient = new SftpClient(_host, _user, _password);
+            _sftpClient = new SftpClient(BuildConnectionInfo());
             _sftpClient.KeepAliveInterval = TimeSpan.FromSeconds(30);
             try
             {
                 _sftpClient.Connect();
-                _logger?.Info("SshService", "GetSftpClient", $"Successfully connected to SFTP host {_host}",
-                    @params: new { host = _host, user = _user },
+                _logger?.Info("SshService", "GetSftpClient", $"Successfully connected to SFTP host {_host} (auth={_authMode})",
+                    @params: new { host = _host, user = _user, authMode = _authMode },
                     tags: new[] { "ssh", "sftp", "connection" });
             }
             catch (Exception ex)

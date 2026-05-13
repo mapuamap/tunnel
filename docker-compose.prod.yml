@@ -7,15 +7,34 @@ services:
       dockerfile: Dockerfile
     container_name: tunnelmanager
     restart: unless-stopped
-    ports:
-      - "5101:5101"
+    expose:
+      - "5101"
+    env_file:
+      - .env
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://0.0.0.0:5101
+      - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
     volumes:
       - ./appsettings.json:/app/appsettings.json:ro
+      - ./.secrets:/run/secrets/tm:ro
       - tunnelmanager_db:/app/data
       - tunnelmanager_keys:/app/data/keys
+    networks:
+      - tunnelmanager_net
+
+  tunnelmanager_nginx:
+    image: nginx:1.27-alpine
+    container_name: tunnelmanager_nginx
+    restart: unless-stopped
+    ports:
+      - "192.168.66.154:5101:443"   # HTTPS on dedicated TM port (no conflict with other services)
+    volumes:
+      - ./nginx/tunnelmgr.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./.secrets/tunnelmgr.crt:/etc/nginx/ssl/tunnelmgr.crt:ro
+      - ./.secrets/tunnelmgr.key:/etc/nginx/ssl/tunnelmgr.key:ro
+    depends_on:
+      - tunnelmanager
     networks:
       - tunnelmanager_net
 

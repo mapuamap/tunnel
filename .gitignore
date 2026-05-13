@@ -88,3 +88,15 @@ Thumbs.db
 *.tmp
 *.temp
 *~
+
+# Secrets (Stage 2: secrets moved to host .env, not committed)
+.env
+.env.*
+!.env.template
+.secrets/
+.claude/backup/
+.claude/tmp/
+.claude/worktrees/
+config.ps1
+!config.ps1.template
+
