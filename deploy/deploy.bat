@@ -9,7 +9,7 @@ set VM_HOST=192.168.66.154
 set VM_USER=expmap
 set VM_PROJECT_PATH=/home/expmap/docker/opt/stacks/tunnelmanager
 set GIT_REPO=github.com/mapuamap/tunnel.git
-set APP_PORT=5101
+set APP_PORT=443
 
 :: Navigate to project root (one level up from deploy folder)
 cd /d "%~dp0.."
@@ -101,5 +101,5 @@ echo.
 echo ==========================================
 echo   [OK] Deploy completed successfully!
 echo ==========================================
-echo   App: http://%VM_HOST%:%APP_PORT%
+echo   App: https://%VM_HOST%/
 echo.

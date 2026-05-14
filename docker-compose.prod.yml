@@ -28,7 +28,7 @@ services:
     container_name: tunnelmanager_nginx
     restart: unless-stopped
     ports:
-      - "192.168.66.154:5101:443"   # HTTPS on dedicated TM port (no conflict with other services)
+      - "192.168.66.154:443:443"   # HTTPS on standard port — URLs work without port suffix
     volumes:
       - ./nginx/tunnelmgr.conf:/etc/nginx/conf.d/default.conf:ro
       - ./.secrets/tunnelmgr.crt:/etc/nginx/ssl/tunnelmgr.crt:ro
