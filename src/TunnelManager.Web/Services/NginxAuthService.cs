@@ -46,6 +46,27 @@ public class NginxAuthService
         return hasAuth;
     }
 
+    public AuthType GetAuthType(string domain)
+    {
+        _loggerMM?.Debug("NginxAuthService", "GetAuthType", $"Detecting auth type for domain: {domain}",
+            @params: new { domain },
+            tags: new[] { "nginx", "auth" });
+
+        var configPath = $"{ConfigDir}/{domain}";
+        if (!_sshService.FileExists(configPath))
+            return AuthType.None;
+
+        var content = _sshService.ReadFile(configPath);
+
+        if (Regex.IsMatch(content, @"include\s+snippets/sso-auth\.conf"))
+            return AuthType.KeycloakSSO;
+
+        if (Regex.IsMatch(content, @"auth_basic"))
+            return AuthType.BasicAuth;
+
+        return AuthType.None;
+    }
+
     public void AddAuth(string domain, string username, string password, string realm = "Restricted Access")
     {
         _loggerMM?.Info("NginxAuthService", "AddAuth", $"Adding Basic Auth for domain: {domain}, username: {username}",
