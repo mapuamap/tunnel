@@ -131,8 +131,6 @@
                         Snackbar.Add("Username и password обязательны", Severity.Warning);
                         return;
                     }
-                    if (_currentAuthType == AuthType.KeycloakSSO)
-                        NginxAuthService.DisableSso(Domain);
                     if (_currentAuthType == AuthType.BasicAuth)
                         NginxAuthService.UpdateAuth(Domain, _username, _password);
                     else
@@ -141,8 +139,6 @@
                     break;
 
                 case AuthType.KeycloakSSO:
-                    if (_currentAuthType == AuthType.BasicAuth)
-                        NginxAuthService.RemoveAuth(Domain);
                     NginxAuthService.EnableSso(Domain);
                     Snackbar.Add("Keycloak SSO включён", Severity.Success);
                     break;

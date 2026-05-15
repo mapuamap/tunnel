@@ -21,31 +21,6 @@ public class NginxAuthService
 
     private string ConfigDir => _configuration["Vps:NginxConfigDir"] ?? "/etc/nginx/sites-available";
 
-    public bool HasAuth(string domain)
-    {
-        _loggerMM?.Debug("NginxAuthService", "HasAuth", $"Checking if auth is configured for domain: {domain}",
-            @params: new { domain },
-            tags: new[] { "nginx", "auth" });
-        
-        var configPath = $"{ConfigDir}/{domain}";
-        if (!_sshService.FileExists(configPath))
-        {
-            _loggerMM?.Debug("NginxAuthService", "HasAuth", $"Config file not found for domain: {domain}",
-                @params: new { domain },
-                tags: new[] { "nginx", "auth" });
-            return false;
-        }
-
-        var content = _sshService.ReadFile(configPath);
-        var hasAuth = Regex.IsMatch(content, @"auth_basic");
-        
-        _loggerMM?.Debug("NginxAuthService", "HasAuth", $"Auth check result for domain {domain}: {hasAuth}",
-            @params: new { domain, hasAuth },
-            tags: new[] { "nginx", "auth" });
-        
-        return hasAuth;
-    }
-
     public AuthType GetAuthType(string domain)
     {
         _loggerMM?.Debug("NginxAuthService", "GetAuthType", $"Detecting auth type for domain: {domain}",
@@ -227,6 +202,12 @@ public class NginxAuthService
             content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
             content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
             content = Regex.Replace(content, @"\s*auth_basic_user_file\s+[^;]+;\s*\n", "");
+
+            // Remove SSO if present before switching to Basic Auth
+            content = Regex.Replace(content, @"\s*include\s+snippets/sso-auth\.conf;\s*\n", "\n");
+            content = Regex.Replace(content, @"\s*location\s+@sso_redirect\s*\{[^}]*\}\s*\n", "\n",
+                RegexOptions.Singleline);
+            content = Regex.Replace(content, @"\s*include\s+snippets/sso-headers\.conf;\s*\n", "\n");
 
             // Add auth directives before proxy_pass
             var authDirectives = $@"
