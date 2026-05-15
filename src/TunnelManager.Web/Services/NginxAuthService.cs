@@ -72,6 +72,111 @@ public class NginxAuthService
         return AuthType.None;
     }
 
+    public void EnableSso(string domain)
+    {
+        _loggerMM?.Info("NginxAuthService", "EnableSso", $"Enabling Keycloak SSO for domain: {domain}",
+            @params: new { domain },
+            tags: new[] { "nginx", "auth", "sso", "add" });
+
+        try
+        {
+            var configPath = $"{ConfigDir}/{domain}";
+            if (!_sshService.FileExists(configPath))
+                throw new FileNotFoundException($"Config not found: {domain}");
+
+            var content = _sshService.ReadFile(configPath);
+
+            // Remove Basic Auth if present before switching
+            content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
+            content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
+            content = Regex.Replace(content, @"\s*auth_basic_user_file\s+[^;]+;\s*\n", "");
+
+            // Add sso-headers inside location / (before proxy_pass)
+            content = Regex.Replace(
+                content,
+                @"(location\s+/\s*\{[^}]*?)(proxy_pass[^;]+;)",
+                "$1        include snippets/sso-headers.conf;\n\n        $2",
+                RegexOptions.Singleline
+            );
+
+            // Add sso-auth.conf include + @sso_redirect before the first location block
+            var ssoBlock = @"
+    include snippets/sso-auth.conf;
+    location @sso_redirect {
+        return 302 https://$host/oauth2/sign_in?rd=$scheme://$host$request_uri;
+    }
+
+";
+            content = Regex.Replace(
+                content,
+                @"(\s*location\s+/\s*\{)",
+                ssoBlock + "$1",
+                RegexOptions.Singleline
+            );
+
+            _sshService.WriteFile(configPath, content);
+
+            // Remove htpasswd file if it exists
+            var htpasswdPath = $"/etc/nginx/.htpasswd_{domain}";
+            _sshService.DeleteFile(htpasswdPath);
+
+            TestAndReloadNginx();
+
+            _loggerMM?.Info("NginxAuthService", "EnableSso", $"Keycloak SSO enabled for domain: {domain}",
+                @params: new { domain },
+                tags: new[] { "nginx", "auth", "sso", "add" });
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("NginxAuthService", "EnableSso", $"Failed to enable SSO for domain {domain}: {ex.Message}",
+                exception: ex,
+                @params: new { domain },
+                tags: new[] { "nginx", "auth", "sso", "error" });
+            throw;
+        }
+    }
+
+    public void DisableSso(string domain)
+    {
+        _loggerMM?.Info("NginxAuthService", "DisableSso", $"Disabling Keycloak SSO for domain: {domain}",
+            @params: new { domain },
+            tags: new[] { "nginx", "auth", "sso", "remove" });
+
+        try
+        {
+            var configPath = $"{ConfigDir}/{domain}";
+            if (!_sshService.FileExists(configPath))
+                return;
+
+            var content = _sshService.ReadFile(configPath);
+
+            // Remove include snippets/sso-auth.conf line
+            content = Regex.Replace(content, @"\s*include\s+snippets/sso-auth\.conf;\s*\n", "\n");
+
+            // Remove location @sso_redirect { ... } block
+            content = Regex.Replace(content, @"\s*location\s+@sso_redirect\s*\{[^}]*\}\s*\n", "\n",
+                RegexOptions.Singleline);
+
+            // Remove include snippets/sso-headers.conf line
+            content = Regex.Replace(content, @"\s*include\s+snippets/sso-headers\.conf;\s*\n", "\n");
+
+            _sshService.WriteFile(configPath, content);
+            TestAndReloadNginx();
+
+            _loggerMM?.Info("NginxAuthService", "DisableSso", $"Keycloak SSO disabled for domain: {domain}",
+                @params: new { domain },
+                tags: new[] { "nginx", "auth", "sso", "remove" });
+        }
+        catch (Exception ex)
+        {
+            _loggerMM?.Error("NginxAuthService", "DisableSso", $"Failed to disable SSO for domain {domain}: {ex.Message}",
+                exception: ex,
+                @params: new { domain },
+                tags: new[] { "nginx", "auth", "sso", "error" });
+            throw;
+        }
+    }
+
     public void AddAuth(string domain, string username, string password, string realm = "Restricted Access")
     {
         _loggerMM?.Info("NginxAuthService", "AddAuth", $"Adding Basic Auth for domain: {domain}, username: {username}",

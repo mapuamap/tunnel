@@ -169,7 +169,7 @@ public class NginxService
         config.HasSsl = Regex.IsMatch(content, @"listen\s+443");
 
         // Check Auth
-        config.HasAuth = Regex.IsMatch(content, @"auth_basic");
+        config.HasAuth = Regex.IsMatch(content, @"auth_basic") || Regex.IsMatch(content, @"include\s+snippets/sso-auth\.conf");
 
         // Check WebSocket
         config.HasWebSocket = Regex.IsMatch(content, @"proxy_http_version\s+1\.1") &&
