@@ -54,7 +54,12 @@ public class NginxAuthService
 
         var configPath = $"{ConfigDir}/{domain}";
         if (!_sshService.FileExists(configPath))
+        {
+            _loggerMM?.Debug("NginxAuthService", "GetAuthType", $"Config file not found for domain: {domain}",
+                @params: new { domain },
+                tags: new[] { "nginx", "auth" });
             return AuthType.None;
+        }
 
         var content = _sshService.ReadFile(configPath);
 
