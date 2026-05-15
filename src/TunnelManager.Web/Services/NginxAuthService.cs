@@ -86,6 +86,15 @@ public class NginxAuthService
 
             var content = _sshService.ReadFile(configPath);
 
+            // Idempotency: if SSO is already enabled, nothing to do
+            if (Regex.IsMatch(content, @"include\s+snippets/sso-auth\.conf"))
+            {
+                _loggerMM?.Debug("NginxAuthService", "EnableSso", $"SSO already enabled for domain: {domain}",
+                    @params: new { domain },
+                    tags: new[] { "nginx", "auth", "sso" });
+                return;
+            }
+
             // Remove Basic Auth if present before switching
             content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
             content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
@@ -94,8 +103,8 @@ public class NginxAuthService
             // Add sso-headers inside location / (before proxy_pass)
             content = Regex.Replace(
                 content,
-                @"(location\s+/\s*\{[^}]*?)(proxy_pass[^;]+;)",
-                "$1        include snippets/sso-headers.conf;\n\n        $2",
+                @"(location\s+/\s*\{[^}]*?\n)(\s*)(proxy_pass[^;]+;)",
+                "$1$2include snippets/sso-headers.conf;\n\n$2$3",
                 RegexOptions.Singleline
             );
 
