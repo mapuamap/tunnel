@@ -9,35 +9,71 @@
 
 <MudDialog>
     <DialogContent>
-        <MudText Typo="Typo.h6" Class="mb-4">Manage Basic Auth for @Domain</MudText>
+        <MudText Typo="Typo.h6" Class="mb-4">Auth for @Domain</MudText>
 
-        @if (_hasAuth)
+        <MudRadioGroup T="AuthType" @bind-Value="_selectedAuthType" Class="mb-4">
+            <MudRadio T="AuthType" Value="AuthType.None" Color="Color.Default">Без защиты</MudRadio>
+            <MudRadio T="AuthType" Value="AuthType.BasicAuth" Color="Color.Primary">Basic Auth</MudRadio>
+            <MudRadio T="AuthType" Value="AuthType.KeycloakSSO" Color="Color.Secondary">Keycloak SSO</MudRadio>
+        </MudRadioGroup>
+
+        @if (_selectedAuthType == AuthType.BasicAuth)
         {
-            <MudAlert Severity="Severity.Info" Class="mb-4">This forward is protected with Basic Auth</MudAlert>
-            <MudText Typo="Typo.body2" Class="mb-2">Users:</MudText>
-            <MudList>
-                @foreach (var user in _users)
-                {
-                    <MudListItem>@user</MudListItem>
-                }
-            </MudList>
-            <MudDivider Class="my-4" />
-        }
-
-        <MudTextField @bind-Value="_username" Label="Username" Variant="Variant.Outlined" Class="mb-2" />
-        <MudTextField @bind-Value="_password" Label="Password" Variant="Variant.Outlined" InputType="InputType.Password" Class="mb-2" />
-        <MudTextField @bind-Value="_realm" Label="Realm" Variant="Variant.Outlined" HelperText="Default: Restricted Access" />
-
-        <MudButtonGroup Class="mt-4">
-            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="AddOrUpdateAuth">@(_hasAuth ? "Update Password" : "Add Auth")</MudButton>
-            @if (_hasAuth)
+            @if (_currentAuthType == AuthType.BasicAuth && _users.Count > 0)
             {
-                <MudButton Color="Color.Error" Variant="Variant.Outlined" OnClick="RemoveAuth">Remove Auth</MudButton>
+                <MudAlert Severity="Severity.Info" Class="mb-3">
+                    Активен Basic Auth. Пользователи: @string.Join(", ", _users)
+                </MudAlert>
             }
-        </MudButtonGroup>
+            <MudTextField @bind-Value="_username" Label="Username" Variant="Variant.Outlined" Class="mb-2" />
+            <MudTextField @bind-Value="_password" Label="Password" Variant="Variant.Outlined"
+                          InputType="InputType.Password" Class="mb-2" />
+            <MudTextField @bind-Value="_realm" Label="Realm" Variant="Variant.Outlined"
+                          HelperText="Default: Restricted Access" Class="mb-2" />
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="ApplyAuthType">
+                @(_currentAuthType == AuthType.BasicAuth ? "Обновить пароль" : "Включить Basic Auth")
+            </MudButton>
+        }
+        else if (_selectedAuthType == AuthType.KeycloakSSO)
+        {
+            @if (_currentAuthType == AuthType.KeycloakSSO)
+            {
+                <MudAlert Severity="Severity.Success" Class="mb-3">
+                    Keycloak SSO активен. Вход через dno.auth.denys.fast
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Class="mb-3">
+                    oauth2-proxy уже настроен на сервере. Нажми "Включить" — nginx начнёт требовать SSO-вход.
+                </MudAlert>
+            }
+            <MudButton Color="Color.Secondary" Variant="Variant.Filled" OnClick="ApplyAuthType"
+                       Disabled="_currentAuthType == AuthType.KeycloakSSO">
+                @(_currentAuthType == AuthType.KeycloakSSO ? "SSO активен" : "Включить SSO")
+            </MudButton>
+        }
+        else
+        {
+            @if (_currentAuthType != AuthType.None)
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-3">
+                    Сайт станет доступен без авторизации.
+                </MudAlert>
+                <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="ApplyAuthType">
+                    Убрать защиту
+                </MudButton>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Normal" Class="mb-3">
+                    Сайт открыт без авторизации.
+                </MudAlert>
+            }
+        }
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Close</MudButton>
+        <MudButton OnClick="Cancel">Закрыть</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -45,7 +81,8 @@
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public string Domain { get; set; } = string.Empty;
 
-    private bool _hasAuth = false;
+    private AuthType _currentAuthType = AuthType.None;
+    private AuthType _selectedAuthType = AuthType.None;
     private List<string> _users = new();
     private string _username = string.Empty;
     private string _password = string.Empty;
@@ -60,109 +97,78 @@
     {
         try
         {
-            _hasAuth = NginxAuthService.HasAuth(Domain);
-            if (_hasAuth)
-            {
+            _currentAuthType = NginxAuthService.GetAuthType(Domain);
+            _selectedAuthType = _currentAuthType;
+            if (_currentAuthType == AuthType.BasicAuth)
                 _users = NginxAuthService.GetAuthUsers(Domain);
-            }
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error loading auth status: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Ошибка загрузки статуса: {ex.Message}", Severity.Error);
         }
     }
 
-    private async Task AddOrUpdateAuth()
+    private async Task ApplyAuthType()
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         var user = authState.User.Identity?.Name ?? "unknown";
-        
-        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
-        {
-            Snackbar.Add("Username and password are required", Severity.Warning);
-            return;
-        }
 
         try
         {
-            if (_hasAuth)
+            switch (_selectedAuthType)
             {
-                NginxAuthService.UpdateAuth(Domain, _username, _password);
-                Snackbar.Add("Password updated", Severity.Success);
-                
-                LoggerMM?.UserAction("AuthManage", "AddOrUpdateAuth", $"Auth password updated for domain: {Domain}, username: {_username}",
-                    user: user,
-                    @params: new { domain = Domain, username = _username },
-                    tags: new[] { "auth", "update", "user-action" });
+                case AuthType.None:
+                    if (_currentAuthType == AuthType.BasicAuth)
+                        NginxAuthService.RemoveAuth(Domain);
+                    else if (_currentAuthType == AuthType.KeycloakSSO)
+                        NginxAuthService.DisableSso(Domain);
+                    Snackbar.Add("Защита убрана", Severity.Success);
+                    break;
+
+                case AuthType.BasicAuth:
+                    if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
+                    {
+                        Snackbar.Add("Username и password обязательны", Severity.Warning);
+                        return;
+                    }
+                    if (_currentAuthType == AuthType.KeycloakSSO)
+                        NginxAuthService.DisableSso(Domain);
+                    if (_currentAuthType == AuthType.BasicAuth)
+                        NginxAuthService.UpdateAuth(Domain, _username, _password);
+                    else
+                        NginxAuthService.AddAuth(Domain, _username, _password, _realm);
+                    Snackbar.Add(_currentAuthType == AuthType.BasicAuth ? "Пароль обновлён" : "Basic Auth включён", Severity.Success);
+                    break;
+
+                case AuthType.KeycloakSSO:
+                    if (_currentAuthType == AuthType.BasicAuth)
+                        NginxAuthService.RemoveAuth(Domain);
+                    NginxAuthService.EnableSso(Domain);
+                    Snackbar.Add("Keycloak SSO включён", Severity.Success);
+                    break;
             }
-            else
-            {
-                NginxAuthService.AddAuth(Domain, _username, _password, _realm);
-                Snackbar.Add("Auth added", Severity.Success);
-                
-                LoggerMM?.UserAction("AuthManage", "AddOrUpdateAuth", $"Auth added for domain: {Domain}, username: {_username}",
-                    user: user,
-                    @params: new { domain = Domain, username = _username, realm = _realm },
-                    tags: new[] { "auth", "add", "user-action" });
-            }
-            LoadAuthStatus();
+
+            LoggerMM?.UserAction("AuthManage", "ApplyAuthType",
+                $"Auth changed for {Domain}: {_currentAuthType} → {_selectedAuthType}",
+                user: user,
+                @params: new { domain = Domain, from = _currentAuthType.ToString(), to = _selectedAuthType.ToString() },
+                tags: new[] { "auth", "change", "user-action" });
+
             _username = string.Empty;
             _password = string.Empty;
+            LoadAuthStatus();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
-            LoggerMM?.Error("AuthManage", "AddOrUpdateAuth", $"Failed to add/update auth for domain {Domain}: {ex.Message}",
+            Snackbar.Add($"Ошибка: {ex.Message}", Severity.Error);
+            LoggerMM?.Error("AuthManage", "ApplyAuthType",
+                $"Failed to change auth for {Domain}: {ex.Message}",
                 user: user,
                 exception: ex,
-                @params: new { domain = Domain, username = _username },
+                @params: new { domain = Domain },
                 tags: new[] { "auth", "error" });
         }
     }
 
-    private async Task RemoveAuth()
-    {
-        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
-        var user = authState.User.Identity?.Name ?? "unknown";
-        
-        var parameters = new DialogParameters
-        {
-            ["ContentText"] = $"Are you sure you want to remove Basic Auth from {Domain}?",
-            ["ButtonText"] = "Remove",
-            ["Color"] = Color.Error
-        };
-        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
-        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Confirm Remove", parameters, options);
-        var result = await dialog.Result;
-
-        if (!result.Canceled)
-        {
-            try
-            {
-                NginxAuthService.RemoveAuth(Domain);
-                Snackbar.Add("Auth removed", Severity.Success);
-                
-                LoggerMM?.UserAction("AuthManage", "RemoveAuth", $"Auth removed for domain: {Domain}",
-                    user: user,
-                    @params: new { domain = Domain },
-                    tags: new[] { "auth", "remove", "user-action" });
-                
-                LoadAuthStatus();
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Error: {ex.Message}", Severity.Error);
-                LoggerMM?.Error("AuthManage", "RemoveAuth", $"Failed to remove auth for domain {Domain}: {ex.Message}",
-                    user: user,
-                    exception: ex,
-                    @params: new { domain = Domain },
-                    tags: new[] { "auth", "remove", "error" });
-            }
-        }
-    }
-
-    private void Cancel()
-    {
-        MudDialog.Close();
-    }
+    private void Cancel() => MudDialog.Close();
 }
