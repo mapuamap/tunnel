@@ -48,9 +48,14 @@
                     oauth2-proxy уже настроен на сервере. Нажми "Включить" — nginx начнёт требовать SSO-вход.
                 </MudAlert>
             }
-            <MudButton Color="Color.Secondary" Variant="Variant.Filled" OnClick="ApplyAuthType"
-                       Disabled="_currentAuthType == AuthType.KeycloakSSO">
-                @(_currentAuthType == AuthType.KeycloakSSO ? "SSO активен" : "Включить SSO")
+
+            <MudTextField @bind-Value="_bypassPathsRaw" Label="Bypass-пути (regex, по строке)"
+                          Variant="Variant.Outlined" Lines="3" Class="mb-2"
+                          Placeholder="^/api/&#10;^/webhook/"
+                          HelperText="Эти пути пойдут МИМО Keycloak — без своей auth на upstream они станут публичны." />
+
+            <MudButton Color="Color.Secondary" Variant="Variant.Filled" OnClick="ApplyAuthType">
+                @(_currentAuthType == AuthType.KeycloakSSO ? "Обновить bypass" : "Включить SSO")
             </MudButton>
         }
         else
@@ -87,6 +92,7 @@
     private string _username = string.Empty;
     private string _password = string.Empty;
     private string _realm = "Restricted Access";
+    private string _bypassPathsRaw = string.Empty;
 
     protected override void OnInitialized()
     {
@@ -101,6 +107,8 @@
             _selectedAuthType = _currentAuthType;
             if (_currentAuthType == AuthType.BasicAuth)
                 _users = NginxAuthService.GetAuthUsers(Domain);
+            if (_currentAuthType == AuthType.KeycloakSSO)
+                _bypassPathsRaw = string.Join("\n", NginxAuthService.GetSsoBypassPatterns(Domain));
         }
         catch (Exception ex)
         {
@@ -139,8 +147,16 @@
                     break;
 
                 case AuthType.KeycloakSSO:
-                    NginxAuthService.EnableSso(Domain);
-                    Snackbar.Add("Keycloak SSO включён", Severity.Success);
+                    var bypass = (_bypassPathsRaw ?? "")
+                        .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(s => s.Trim())
+                        .Where(s => s.Length > 0)
+                        .ToList();
+                    NginxAuthService.EnableSso(Domain, bypass);
+                    Snackbar.Add(_currentAuthType == AuthType.KeycloakSSO
+                        ? $"Bypass обновлён ({bypass.Count} паттернов)"
+                        : "Keycloak SSO включён",
+                        Severity.Success);
                     break;
             }
 

@@ -47,10 +47,16 @@ public class NginxAuthService
         return AuthType.None;
     }
 
-    public void EnableSso(string domain)
+    public void EnableSso(string domain, IReadOnlyList<string>? bypassPatterns = null)
     {
+        var patterns = (bypassPatterns ?? Array.Empty<string>())
+            .Select(p => p?.Trim() ?? "")
+            .Where(p => p.Length > 0)
+            .Distinct()
+            .ToList();
+
         _loggerMM?.Info("NginxAuthService", "EnableSso", $"Enabling Keycloak SSO for domain: {domain}",
-            @params: new { domain },
+            @params: new { domain, bypassPatterns = patterns },
             tags: new[] { "nginx", "auth", "sso", "add" });
 
         try
@@ -61,19 +67,24 @@ public class NginxAuthService
 
             var content = _sshService.ReadFile(configPath);
 
-            // Idempotency: if SSO is already enabled, nothing to do
+            // Idempotency: SSO already on AND bypass set matches → nothing to do
             if (Regex.IsMatch(content, @"include\s+snippets/sso-auth\.conf"))
             {
-                _loggerMM?.Debug("NginxAuthService", "EnableSso", $"SSO already enabled for domain: {domain}",
-                    @params: new { domain },
-                    tags: new[] { "nginx", "auth", "sso" });
-                return;
+                var current = ExtractBypassPatterns(content);
+                if (current.SequenceEqual(patterns))
+                {
+                    _loggerMM?.Debug("NginxAuthService", "EnableSso", $"SSO already enabled with same bypass set for: {domain}",
+                        @params: new { domain },
+                        tags: new[] { "nginx", "auth", "sso" });
+                    return;
+                }
             }
 
-            // Remove Basic Auth if present before switching
-            content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
-            content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
-            content = Regex.Replace(content, @"\s*auth_basic_user_file\s+[^;]+;\s*\n", "");
+            content = StripBasicAuth(content);
+            content = StripSsoMarkers(content);
+
+            var locBody = ExtractLocationRootBody(content)
+                ?? throw new InvalidOperationException($"location / {{ not found in vhost for {domain}");
 
             // Add sso-headers inside location / (before proxy_pass)
             content = Regex.Replace(
@@ -83,14 +94,18 @@ public class NginxAuthService
                 RegexOptions.Singleline
             );
 
-            // Add sso-auth.conf include + @sso_redirect before the first location block
-            var ssoBlock = @"
-    include snippets/sso-auth.conf;
-    location @sso_redirect {
-        return 302 https://$host/oauth2/sign_in?rd=$scheme://$host$request_uri;
-    }
+            // Build bypass block (clone of location / body without sso-headers)
+            var bypassBlocks = BuildBypassBlocks(patterns, locBody);
 
-";
+            // Insert sso-auth.conf include + @sso_redirect + bypass blocks before location /
+            var ssoBlock = "\n" +
+                "    include snippets/sso-auth.conf;\n" +
+                "    location @sso_redirect {\n" +
+                "        return 302 https://$host/oauth2/sign_in?rd=$scheme://$host$request_uri;\n" +
+                "    }\n" +
+                bypassBlocks +
+                "\n";
+
             content = Regex.Replace(
                 content,
                 @"(\s*location\s+/\s*\{)",
@@ -107,7 +122,7 @@ public class NginxAuthService
             TestAndReloadNginx();
 
             _loggerMM?.Info("NginxAuthService", "EnableSso", $"Keycloak SSO enabled for domain: {domain}",
-                @params: new { domain },
+                @params: new { domain, bypassPatterns = patterns },
                 tags: new[] { "nginx", "auth", "sso", "add" });
         }
         catch (Exception ex)
@@ -118,6 +133,83 @@ public class NginxAuthService
                 tags: new[] { "nginx", "auth", "sso", "error" });
             throw;
         }
+    }
+
+    public List<string> GetSsoBypassPatterns(string domain)
+    {
+        var configPath = $"{ConfigDir}/{domain}";
+        if (!_sshService.FileExists(configPath))
+            return new List<string>();
+        var content = _sshService.ReadFile(configPath);
+        return ExtractBypassPatterns(content);
+    }
+
+    private static List<string> ExtractBypassPatterns(string content)
+    {
+        var block = Regex.Match(content,
+            @"#\s*BEGIN SSO BYPASS(.*?)#\s*END SSO BYPASS",
+            RegexOptions.Singleline);
+        if (!block.Success) return new List<string>();
+        return Regex.Matches(block.Groups[1].Value, @"location\s+~\s+(\S+)\s*\{")
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+    }
+
+    private static string BuildBypassBlocks(IReadOnlyList<string> patterns, string locationBody)
+    {
+        if (patterns.Count == 0) return "";
+        // Strip sso-headers include from clone body
+        var cleanBody = string.Join("\n",
+            locationBody.Split('\n').Where(ln => !ln.Contains("snippets/sso-headers.conf")));
+        var sb = new System.Text.StringBuilder();
+        sb.Append('\n');
+        sb.Append("    # BEGIN SSO BYPASS\n");
+        foreach (var pat in patterns)
+        {
+            sb.Append($"    location ~ {pat} {{");
+            sb.Append(cleanBody.TrimEnd('\r', '\n', ' '));
+            sb.Append("\n    }\n");
+        }
+        sb.Append("    # END SSO BYPASS\n");
+        return sb.ToString();
+    }
+
+    private static string? ExtractLocationRootBody(string content)
+    {
+        var m = Regex.Match(content, @"location\s+/\s*\{");
+        if (!m.Success) return null;
+        int bodyStart = m.Index + m.Length;
+        int depth = 1;
+        for (int i = bodyStart; i < content.Length; i++)
+        {
+            if (content[i] == '{') depth++;
+            else if (content[i] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return content.Substring(bodyStart, i - bodyStart);
+            }
+        }
+        return null;
+    }
+
+    private static string StripBasicAuth(string content)
+    {
+        content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
+        content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
+        content = Regex.Replace(content, @"\s*auth_basic_user_file\s+[^;]+;\s*\n", "");
+        return content;
+    }
+
+    private static string StripSsoMarkers(string content)
+    {
+        content = Regex.Replace(content, @"\s*#\s*BEGIN SSO BYPASS\b.*?#\s*END SSO BYPASS[^\n]*\n", "\n",
+            RegexOptions.Singleline);
+        content = Regex.Replace(content, @"\s*include\s+snippets/sso-auth\.conf;\s*\n", "\n");
+        content = Regex.Replace(content, @"\s*location\s+@sso_redirect\s*\{[^}]*\}\s*\n", "\n",
+            RegexOptions.Singleline);
+        content = Regex.Replace(content, @"\s*include\s+snippets/sso-headers\.conf;\s*\n", "\n");
+        return content;
     }
 
     public void DisableSso(string domain)
@@ -133,17 +225,7 @@ public class NginxAuthService
                 return;
 
             var content = _sshService.ReadFile(configPath);
-
-            // Remove include snippets/sso-auth.conf line
-            content = Regex.Replace(content, @"\s*include\s+snippets/sso-auth\.conf;\s*\n", "\n");
-
-            // Remove location @sso_redirect { ... } block
-            content = Regex.Replace(content, @"\s*location\s+@sso_redirect\s*\{[^}]*\}\s*\n", "\n",
-                RegexOptions.Singleline);
-
-            // Remove include snippets/sso-headers.conf line
-            content = Regex.Replace(content, @"\s*include\s+snippets/sso-headers\.conf;\s*\n", "\n");
-
+            content = StripSsoMarkers(content);
             _sshService.WriteFile(configPath, content);
             TestAndReloadNginx();
 
@@ -198,16 +280,8 @@ public class NginxAuthService
             // Add auth to nginx config
             var content = _sshService.ReadFile(configPath);
 
-            // Remove existing auth if present
-            content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
-            content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
-            content = Regex.Replace(content, @"\s*auth_basic_user_file\s+[^;]+;\s*\n", "");
-
-            // Remove SSO if present before switching to Basic Auth
-            content = Regex.Replace(content, @"\s*include\s+snippets/sso-auth\.conf;\s*\n", "\n");
-            content = Regex.Replace(content, @"\s*location\s+@sso_redirect\s*\{[^}]*\}\s*\n", "\n",
-                RegexOptions.Singleline);
-            content = Regex.Replace(content, @"\s*include\s+snippets/sso-headers\.conf;\s*\n", "\n");
+            content = StripBasicAuth(content);
+            content = StripSsoMarkers(content);
 
             // Add auth directives before proxy_pass
             var authDirectives = $@"
@@ -295,10 +369,7 @@ public class NginxAuthService
 
             var content = _sshService.ReadFile(configPath);
 
-            // Remove auth directives
-            content = Regex.Replace(content, @"\s*# Basic HTTP Authentication\s*\n", "");
-            content = Regex.Replace(content, @"\s*auth_basic\s+""[^""]*"";\s*\n", "");
-            content = Regex.Replace(content, @"\s*auth_basic_user_file\s+[^;]+;\s*\n", "");
+            content = StripBasicAuth(content);
 
             _sshService.WriteFile(configPath, content);
 
